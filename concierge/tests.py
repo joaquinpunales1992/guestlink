@@ -1,0 +1,174 @@
+"""Smoke tests for the relay routing logic.
+
+Runs with WHATSAPP_DRY_RUN=1 (default) so no network calls are made — outbound
+messages are still persisted as Message rows, which is what we assert against.
+"""
+
+from unittest.mock import patch
+
+from django.test import TestCase, override_settings
+
+from concierge.classifier import Classification
+from concierge.models import Guest, Message, Provider, Service, Ticket
+from concierge.relay import CODE_RE, _strip_code, handle_inbound, normalize_phone
+
+
+@override_settings(WHATSAPP_DRY_RUN=True, ANTHROPIC_API_KEY="")
+class RelayTests(TestCase):
+    def setUp(self) -> None:
+        self.saona_provider = Provider.objects.create(name="María (Saona)", phone="+18091111111")
+        self.taxi_provider = Provider.objects.create(name="Pedro Taxi", phone="+18092222222")
+
+        self.saona = Service.objects.create(
+            slug="saona",
+            name_en="Saona Island excursion",
+            name_es="Excursión Isla Saona",
+            keywords="saona, island, isla, excursion, excursión",
+            default_provider=self.saona_provider,
+            expected_commission_usd=15,
+        )
+        self.taxi = Service.objects.create(
+            slug="airport-taxi",
+            name_en="Airport taxi",
+            name_es="Taxi al aeropuerto",
+            keywords="airport, aeropuerto, taxi, transfer",
+            default_provider=self.taxi_provider,
+            expected_commission_usd=5,
+        )
+
+    # ---- helpers ----------------------------------------------------------
+
+    def _msgs(self, direction: str | None = None):
+        qs = Message.objects.all()
+        if direction:
+            qs = qs.filter(direction=direction)
+        return list(qs.order_by("created_at"))
+
+    # ---- code parsing -----------------------------------------------------
+
+    def test_code_regex_matches_brackets(self) -> None:
+        m = CODE_RE.search("[A47B3] sí podemos llevarlo")
+        self.assertIsNotNone(m)
+        self.assertEqual(m.group(1).upper(), "A47B3")
+
+    def test_strip_code_removes_first_bracket_group(self) -> None:
+        self.assertEqual(_strip_code("[A47B3] Sí, claro"), "Sí, claro")
+        self.assertEqual(_strip_code("Sí, claro"), "Sí, claro")
+
+    def test_normalize_phone_strips_punctuation(self) -> None:
+        self.assertEqual(normalize_phone("+1 (809) 222-3333"), "+18092223333")
+        self.assertEqual(normalize_phone("  "), "")
+
+    # ---- guest → first message → new ticket -------------------------------
+
+    def test_guest_first_message_creates_ticket_and_intros_provider(self) -> None:
+        outcome = handle_inbound(
+            from_phone="+4915112345678",
+            body="Hi, I'd like info about the Saona excursion for tomorrow",
+        )
+        self.assertTrue(outcome.handled)
+        self.assertIsNotNone(outcome.ticket)
+        self.assertEqual(outcome.ticket.service, self.saona)
+        self.assertEqual(outcome.ticket.provider, self.saona_provider)
+        self.assertEqual(outcome.ticket.status, Ticket.Status.OPEN)
+
+        guest_in = self._msgs(Message.Direction.GUEST_IN)
+        provider_out = self._msgs(Message.Direction.PROVIDER_OUT)
+        guest_out = self._msgs(Message.Direction.GUEST_OUT)
+
+        self.assertEqual(len(guest_in), 1)
+        self.assertEqual(len(provider_out), 1)
+        self.assertEqual(len(guest_out), 1)
+        self.assertIn(f"[{outcome.ticket.short_code}]", provider_out[0].body)
+        self.assertEqual(provider_out[0].to_phone, self.saona_provider.phone)
+        self.assertEqual(guest_out[0].to_phone, "+4915112345678")
+
+    def test_guest_second_message_routes_to_same_provider_with_prefix(self) -> None:
+        first = handle_inbound(from_phone="+4915112345678", body="Hi, I want Saona excursion")
+        Message.objects.all().delete()  # focus on the second exchange
+
+        outcome = handle_inbound(from_phone="+4915112345678", body="we are 4 people, possible?")
+        self.assertEqual(outcome.ticket, first.ticket)
+        provider_out = self._msgs(Message.Direction.PROVIDER_OUT)
+        self.assertEqual(len(provider_out), 1)
+        self.assertTrue(provider_out[0].body.startswith(f"[{first.ticket.short_code}]"))
+        self.assertEqual(provider_out[0].to_phone, self.saona_provider.phone)
+
+    # ---- provider → guest with code --------------------------------------
+
+    def test_provider_with_code_routes_back_to_guest_and_strips_code(self) -> None:
+        first = handle_inbound(from_phone="+4915112345678", body="Hi, Saona excursion please")
+        Message.objects.all().delete()
+        code = first.ticket.short_code
+
+        outcome = handle_inbound(
+            from_phone=self.saona_provider.phone,
+            body=f"[{code}] sí, podemos llevarlos. USD 60 por persona.",
+        )
+        self.assertEqual(outcome.ticket, first.ticket)
+        guest_out = self._msgs(Message.Direction.GUEST_OUT)
+        self.assertEqual(len(guest_out), 1)
+        self.assertEqual(guest_out[0].to_phone, "+4915112345678")
+        self.assertNotIn("[", guest_out[0].body)
+        self.assertIn("USD 60", guest_out[0].body)
+        first.ticket.refresh_from_db()
+        self.assertEqual(first.ticket.status, Ticket.Status.IN_PROGRESS)
+
+    def test_provider_without_code_but_single_active_ticket_routes_anyway(self) -> None:
+        first = handle_inbound(from_phone="+4915112345678", body="Hi, Saona please")
+        Message.objects.all().delete()
+
+        outcome = handle_inbound(from_phone=self.saona_provider.phone, body="sí, llegamos a las 7am")
+        self.assertEqual(outcome.ticket, first.ticket)
+        guest_out = self._msgs(Message.Direction.GUEST_OUT)
+        self.assertEqual(len(guest_out), 1)
+
+    def test_provider_without_code_and_multiple_active_tickets_asks_for_code(self) -> None:
+        # Two guests, both with active tickets pointing at the same provider.
+        handle_inbound(from_phone="+4915100000001", body="Saona please")
+        handle_inbound(from_phone="+4915100000002", body="Saona excursion thanks")
+        Message.objects.all().delete()
+
+        outcome = handle_inbound(from_phone=self.saona_provider.phone, body="ok confirmado")
+        self.assertTrue(outcome.handled)
+        self.assertIsNone(outcome.ticket)
+        system_out = self._msgs(Message.Direction.SYSTEM_OUT)
+        self.assertEqual(len(system_out), 1)
+        self.assertIn("código", system_out[0].body.lower())
+
+    # ---- unmatched service -----------------------------------------------
+
+    def test_guest_message_with_no_service_match_pings_host_fallback(self) -> None:
+        outcome = handle_inbound(from_phone="+4915199999999", body="hola necesito ayuda con algo raro")
+        self.assertTrue(outcome.handled)
+        self.assertIsNone(outcome.ticket)
+        system_out = self._msgs(Message.Direction.SYSTEM_OUT)
+        self.assertEqual(len(system_out), 1)
+        # No ticket → no PROVIDER_OUT message
+        self.assertEqual(len(self._msgs(Message.Direction.PROVIDER_OUT)), 0)
+
+
+@override_settings(WHATSAPP_DRY_RUN=True, ANTHROPIC_API_KEY="sk-test")
+class ClassifierIntegrationTests(TestCase):
+    """When ANTHROPIC_API_KEY is set, the relay should call the Claude classifier.
+
+    We patch the classifier itself so no network call happens.
+    """
+
+    def setUp(self) -> None:
+        self.provider = Provider.objects.create(name="María", phone="+18091111111")
+        self.service = Service.objects.create(
+            slug="saona",
+            name_en="Saona Island excursion",
+            name_es="Excursión Isla Saona",
+            keywords="",  # force LLM path
+            default_provider=self.provider,
+        )
+
+    def test_relay_uses_classifier_result(self) -> None:
+        fake = Classification(service_slug="saona", confidence=0.92, extracted_fields={"party_size": 4}, backend="claude")
+        with patch("concierge.relay.classify", return_value=fake):
+            outcome = handle_inbound(from_phone="+4912345", body="something cryptic the keywords would miss")
+        self.assertIsNotNone(outcome.ticket)
+        self.assertEqual(outcome.ticket.service, self.service)
+        self.assertEqual(outcome.ticket.extracted_fields, {"party_size": 4})

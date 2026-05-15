@@ -1,0 +1,123 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ host_name }} · Apto {{ apartment_label }} · Bayahibe</title>
+  <style>
+    :root {
+      --bg: #f7f5f1;
+      --card: #ffffff;
+      --ink: #1f2937;
+      --muted: #6b7280;
+      --accent: #128c7e;
+      --accent-ink: #ffffff;
+      --border: #e5e7eb;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+    .wrap { max-width: 520px; margin: 0 auto; padding: 24px 16px 64px; }
+    header { text-align: center; padding: 16px 0 24px; }
+    header h1 { margin: 0; font-size: 22px; font-weight: 600; }
+    header p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+    .lang-toggle { display: flex; gap: 8px; justify-content: center; margin: 16px 0 24px; }
+    .lang-toggle button {
+      background: var(--card); border: 1px solid var(--border); color: var(--ink);
+      padding: 6px 14px; border-radius: 999px; font-size: 13px; cursor: pointer;
+    }
+    .lang-toggle button.active { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+    .service {
+      display: block;
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 18px 18px;
+      margin-bottom: 12px;
+      text-decoration: none;
+      color: var(--ink);
+      transition: transform 0.05s ease, box-shadow 0.15s ease;
+    }
+    .service:active { transform: scale(0.99); }
+    .service:hover { box-shadow: 0 4px 14px rgba(0,0,0,0.06); }
+    .service h2 { margin: 0; font-size: 17px; font-weight: 600; }
+    .service p { margin: 4px 0 0; color: var(--muted); font-size: 14px; line-height: 1.4; }
+    .cta { display: flex; align-items: center; gap: 8px; margin-top: 12px;
+      color: var(--accent); font-size: 14px; font-weight: 500; }
+    .cta::before { content: "💬"; }
+    footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 28px; }
+    .lang-es .en, .lang-en .es { display: none; }
+  </style>
+</head>
+<body class="lang-en">
+  <div class="wrap">
+    <header>
+      <h1>
+        <span class="en">Welcome to Apto {{ apartment_label }}</span>
+        <span class="es">Bienvenido al Apto {{ apartment_label }}</span>
+      </h1>
+      <p>
+        <span class="en">Need anything during your stay? Tap a service below.</span>
+        <span class="es">¿Necesitas algo durante tu estadía? Toca un servicio.</span>
+      </p>
+    </header>
+
+    <div class="lang-toggle" role="tablist" aria-label="Language">
+      <button type="button" data-lang="en" class="active">EN</button>
+      <button type="button" data-lang="es">ES</button>
+    </div>
+
+    {% for s in services %}
+      {% with msg_en="Hi! I'm staying at Apto "|add:apartment_label|add:". I'd like info about "|add:s.name_en|add:"." msg_es="Hola! Estoy en el Apto "|add:apartment_label|add:". Quisiera info sobre "|add:s.name_es|add:"." %}
+      <a class="service"
+         href="https://wa.me/{{ business_number }}?text={{ msg_en|urlencode }}"
+         data-href-en="https://wa.me/{{ business_number }}?text={{ msg_en|urlencode }}"
+         data-href-es="https://wa.me/{{ business_number }}?text={{ msg_es|urlencode }}">
+        <h2>
+          <span class="en">{{ s.name_en }}</span>
+          <span class="es">{{ s.name_es }}</span>
+        </h2>
+        {% if s.description_en or s.description_es %}
+          <p>
+            <span class="en">{{ s.description_en|default:s.description_es }}</span>
+            <span class="es">{{ s.description_es|default:s.description_en }}</span>
+          </p>
+        {% endif %}
+        <div class="cta">
+          <span class="en">Open WhatsApp</span>
+          <span class="es">Abrir WhatsApp</span>
+        </div>
+      </a>
+      {% endwith %}
+    {% empty %}
+      <p style="text-align:center;color:var(--muted)">No services configured yet.</p>
+    {% endfor %}
+
+    <footer>
+      {{ host_name }} · Bayahibe, RD
+    </footer>
+  </div>
+
+  <script>
+    (function () {
+      const body = document.body;
+      const buttons = document.querySelectorAll(".lang-toggle button");
+      const services = document.querySelectorAll(".service");
+      function setLang(lang) {
+        body.classList.toggle("lang-en", lang === "en");
+        body.classList.toggle("lang-es", lang === "es");
+        buttons.forEach(b => b.classList.toggle("active", b.dataset.lang === lang));
+        services.forEach(a => { a.href = a.dataset["href" + (lang === "es" ? "Es" : "En")]; });
+        try { localStorage.setItem("guestlink:lang", lang); } catch (_) {}
+      }
+      buttons.forEach(b => b.addEventListener("click", () => setLang(b.dataset.lang)));
+      let initial = "en";
+      try { initial = localStorage.getItem("guestlink:lang") || initial; } catch (_) {}
+      if (initial !== "en" && initial !== "es") initial = "en";
+      const nav = (navigator.language || "").toLowerCase();
+      if (!localStorage.getItem("guestlink:lang") && nav.startsWith("es")) initial = "es";
+      setLang(initial);
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,93 @@
+"""HTTP views: WhatsApp webhook + the QR landing page."""
+
+from __future__ import annotations
+
+import json
+import logging
+
+from django.conf import settings
+from django.http import HttpRequest, HttpResponse, HttpResponseBadRequest, JsonResponse
+from django.shortcuts import render
+from django.urls import reverse
+from django.views.decorators.csrf import csrf_exempt
+from django.views.decorators.http import require_http_methods
+
+from .models import Service
+from .relay import handle_inbound
+
+logger = logging.getLogger(__name__)
+
+
+@csrf_exempt
+@require_http_methods(["GET", "POST"])
+def whatsapp_webhook(request: HttpRequest) -> HttpResponse:
+    if request.method == "GET":
+        return _handle_verification(request)
+    return _handle_event(request)
+
+
+def _handle_verification(request: HttpRequest) -> HttpResponse:
+    mode = request.GET.get("hub.mode")
+    token = request.GET.get("hub.verify_token")
+    challenge = request.GET.get("hub.challenge", "")
+    if mode == "subscribe" and token and token == settings.WHATSAPP_VERIFY_TOKEN:
+        return HttpResponse(challenge, content_type="text/plain")
+    return HttpResponseBadRequest("verification failed")
+
+
+def _handle_event(request: HttpRequest) -> HttpResponse:
+    try:
+        payload = json.loads(request.body or b"{}")
+    except json.JSONDecodeError:
+        return HttpResponseBadRequest("invalid json")
+
+    if payload.get("object") != "whatsapp_business_account":
+        # Meta sometimes sends test pings; always 200 so they don't retry forever.
+        return JsonResponse({"ignored": True})
+
+    for entry in payload.get("entry") or []:
+        for change in entry.get("changes") or []:
+            value = change.get("value") or {}
+            for msg in value.get("messages") or []:
+                _process_message(msg, raw=payload)
+            # value.statuses (delivered/read receipts) ignored for v1
+    return JsonResponse({"ok": True})
+
+
+def _process_message(msg: dict, *, raw: dict) -> None:
+    msg_type = msg.get("type")
+    if msg_type != "text":
+        logger.info("Ignoring non-text message of type=%s", msg_type)
+        return
+    from_phone = msg.get("from", "")
+    body = (msg.get("text") or {}).get("body", "")
+    wa_id = msg.get("id", "")
+    try:
+        outcome = handle_inbound(
+            from_phone=f"+{from_phone}" if from_phone and not from_phone.startswith("+") else from_phone,
+            body=body,
+            wa_message_id=wa_id,
+            raw=raw,
+        )
+        logger.info("Relay outcome: %s", outcome)
+    except Exception:
+        logger.exception("Relay failed for wa_id=%s", wa_id)
+
+
+def landing(request: HttpRequest) -> HttpResponse:
+    services = Service.objects.filter(active=True)
+    business_number = (settings.WHATSAPP_BUSINESS_NUMBER or "").lstrip("+") or "REPLACE_WITH_E164_DIGITS"
+    return render(
+        request,
+        "concierge/landing.html",
+        {
+            "services": services,
+            "business_number": business_number,
+            "host_name": settings.HOST_NAME,
+            "apartment_label": settings.HOST_APARTMENT_LABEL,
+        },
+    )
+
+
+def healthz(request: HttpRequest) -> HttpResponse:
+    return JsonResponse({"ok": True, "webhook": reverse("whatsapp_webhook")})

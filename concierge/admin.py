@@ -1,4 +1,6 @@
 from django.contrib import admin
+from django.urls import reverse
+from django.utils.html import format_html
 
 from .models import Guest, Message, Provider, Service, Ticket
 
@@ -36,12 +38,17 @@ class MessageInline(admin.TabularInline):
 
 @admin.register(Ticket)
 class TicketAdmin(admin.ModelAdmin):
-    list_display = ("short_code", "guest", "service", "provider", "status", "expected_commission_usd", "created_at")
+    list_display = ("short_code", "guest", "service", "provider", "status", "expected_commission_usd", "created_at", "thread_link")
     list_filter = ("status", "service", "provider")
     search_fields = ("short_code", "guest__phone", "guest__name", "notes")
-    readonly_fields = ("short_code", "created_at", "raw_first_message", "extracted_fields")
+    readonly_fields = ("short_code", "created_at", "raw_first_message", "extracted_fields", "thread_link")
     inlines = [MessageInline]
     actions = ["mark_completed", "mark_no_show", "mark_cancelled"]
+
+    @admin.display(description="Chat view")
+    def thread_link(self, obj: Ticket) -> str:
+        url = reverse("ticket_thread", args=[obj.short_code])
+        return format_html('<a href="{}" target="_blank">Open thread →</a>', url)
 
     @admin.action(description="Mark selected tickets as completed")
     def mark_completed(self, request, queryset):

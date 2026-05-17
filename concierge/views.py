@@ -6,13 +6,14 @@ import json
 import logging
 
 from django.conf import settings
+from django.contrib.admin.views.decorators import staff_member_required
 from django.http import HttpRequest, HttpResponse, HttpResponseBadRequest, JsonResponse
-from django.shortcuts import render
+from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from .models import Service
+from .models import Service, Ticket
 from .relay import handle_inbound
 
 logger = logging.getLogger(__name__)
@@ -91,3 +92,13 @@ def landing(request: HttpRequest) -> HttpResponse:
 
 def healthz(request: HttpRequest) -> HttpResponse:
     return JsonResponse({"ok": True, "webhook": reverse("whatsapp_webhook")})
+
+
+@staff_member_required
+def ticket_thread(request: HttpRequest, short_code: str) -> HttpResponse:
+    ticket = get_object_or_404(Ticket, short_code=short_code.upper())
+    return render(
+        request,
+        "concierge/ticket_thread.html",
+        {"ticket": ticket, "messages": ticket.messages.order_by("created_at")},
+    )

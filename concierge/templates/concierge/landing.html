@@ -4,88 +4,158 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ host_name }} · Apto {{ apartment_label }} · Bayahibe</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Pacifico&family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
-      --bg: #f7f5f1;
+      --sky: #7fd8e8;
+      --sea: #0ea5b7;
+      --sea-deep: #075e6a;
+      --sand: #fdf2d6;
+      --sand-warm: #f5e3b8;
+      --coral: #ff6b5b;
+      --coral-deep: #e25244;
+      --palm: #1f7a4d;
+      --palm-light: #3aa874;
       --card: #ffffff;
-      --ink: #1f2937;
-      --muted: #6b7280;
-      --accent: #128c7e;
-      --accent-ink: #ffffff;
-      --border: #e5e7eb;
+      --ink: #103641;
+      --muted: #5c7a83;
+      --border: rgba(15, 94, 106, 0.12);
     }
     * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; background: var(--bg); color: var(--ink);
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-    .wrap { max-width: 520px; margin: 0 auto; padding: 24px 16px 64px; }
-    header { text-align: center; padding: 16px 0 24px; }
-    header h1 { margin: 0; font-size: 22px; font-weight: 600; }
-    header p { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
-    .lang-toggle { display: flex; gap: 8px; justify-content: center; margin: 16px 0 24px; }
-    .lang-toggle button {
-      background: var(--card); border: 1px solid var(--border); color: var(--ink);
-      padding: 6px 14px; border-radius: 999px; font-size: 13px; cursor: pointer;
+    html, body { margin: 0; padding: 0; color: var(--ink);
+      font-family: "Quicksand", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-weight: 500;
+      min-height: 100%;
+      background:
+        radial-gradient(ellipse at top, var(--sky) 0%, transparent 55%),
+        linear-gradient(180deg, var(--sea) 0%, var(--sea) 35%, var(--sand) 65%, var(--sand-warm) 100%);
+      background-attachment: fixed;
     }
-    .lang-toggle button.active { background: var(--ink); color: var(--bg); border-color: var(--ink); }
+    body::before {
+      /* sun */
+      content: "";
+      position: fixed;
+      top: -60px; right: -60px;
+      width: 220px; height: 220px;
+      background: radial-gradient(circle, #ffd97a 0%, #ffb454 55%, rgba(255,180,84,0) 70%);
+      pointer-events: none;
+      z-index: 0;
+    }
+    body::after {
+      /* gentle wave divider behind cards */
+      content: "";
+      position: fixed;
+      left: 0; right: 0;
+      top: 42%;
+      height: 80px;
+      background:
+        radial-gradient(ellipse at 20% 0%, rgba(255,255,255,0.6) 0%, transparent 60%),
+        radial-gradient(ellipse at 70% 0%, rgba(255,255,255,0.45) 0%, transparent 60%);
+      pointer-events: none;
+      z-index: 0;
+    }
+    .wrap { position: relative; z-index: 1; max-width: 520px; margin: 0 auto; padding: 28px 16px 64px; }
+    header { text-align: center; padding: 8px 0 20px; color: #ffffff;
+      text-shadow: 0 2px 12px rgba(7, 94, 106, 0.35); }
+    .palms { font-size: 28px; letter-spacing: 6px; opacity: 0.95; }
+    header h1 { margin: 6px 0 0; font-family: "Pacifico", cursive; font-weight: 400;
+      font-size: 30px; line-height: 1.15; }
+    header p { margin: 8px 0 0; font-size: 14.5px; font-weight: 500;
+      color: rgba(255,255,255,0.95); }
+    .lang-toggle { display: flex; gap: 8px; justify-content: center; margin: 18px 0 22px; }
+    .lang-toggle button {
+      background: rgba(255,255,255,0.85); border: 1px solid rgba(255,255,255,0.6);
+      color: var(--sea-deep); padding: 7px 16px; border-radius: 999px;
+      font: 600 13px "Quicksand", sans-serif; cursor: pointer;
+      backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
+    }
+    .lang-toggle button.active { background: var(--coral); color: #fff;
+      border-color: var(--coral-deep); box-shadow: 0 4px 12px rgba(255,107,91,0.4); }
     .service {
-      display: block;
+      position: relative; display: block;
       background: var(--card);
       border: 1px solid var(--border);
-      border-radius: 14px;
-      padding: 18px 18px;
-      margin-bottom: 12px;
+      border-left: 5px solid var(--palm-light);
+      border-radius: 16px;
+      padding: 18px 18px 16px;
+      margin-bottom: 14px;
       text-decoration: none;
       color: var(--ink);
-      transition: transform 0.05s ease, box-shadow 0.15s ease;
+      box-shadow: 0 10px 24px rgba(7, 94, 106, 0.12);
+      transition: transform 0.08s ease, box-shadow 0.15s ease;
+      overflow: hidden;
+    }
+    .service::after {
+      /* hibiscus dot */
+      content: ""; position: absolute; top: -22px; right: -22px;
+      width: 70px; height: 70px; border-radius: 50%;
+      background: radial-gradient(circle, rgba(255,107,91,0.18) 0%, rgba(255,107,91,0) 70%);
     }
     .service:active { transform: scale(0.99); }
-    .service:hover { box-shadow: 0 4px 14px rgba(0,0,0,0.06); }
-    .service h2 { margin: 0; font-size: 17px; font-weight: 600; }
-    .service p { margin: 4px 0 0; color: var(--muted); font-size: 14px; line-height: 1.4; }
-    .cta { display: flex; align-items: center; gap: 8px; margin-top: 12px;
-      color: var(--accent); font-size: 14px; font-weight: 500; }
-    .cta::before { content: "💬"; }
-    footer { text-align: center; color: var(--muted); font-size: 12px; margin-top: 28px; }
-    .lang-es .en, .lang-en .es { display: none; }
+    .service:hover { box-shadow: 0 14px 30px rgba(7, 94, 106, 0.18); border-left-color: var(--palm); }
+    .service h2 { margin: 0; font-size: 18px; font-weight: 700; color: var(--sea-deep); }
+    .service p { margin: 6px 0 0; color: var(--muted); font-size: 14px; line-height: 1.45;
+      font-weight: 500; }
+    .cta { display: inline-flex; align-items: center; gap: 8px; margin-top: 12px;
+      color: #fff; background: var(--coral); padding: 7px 14px;
+      border-radius: 999px; font-size: 13px; font-weight: 700;
+      box-shadow: 0 4px 10px rgba(255,107,91,0.35); }
+    .cta::before { content: "🌺"; filter: drop-shadow(0 1px 0 rgba(0,0,0,0.1)); }
+    footer { text-align: center; color: var(--sea-deep); font-size: 13px;
+      margin-top: 32px; font-weight: 600; opacity: 0.85; }
+    footer .waves { display: block; font-size: 18px; letter-spacing: 4px; margin-bottom: 4px; }
+    .lang-en .es, .lang-en .fr,
+    .lang-es .en, .lang-es .fr,
+    .lang-fr .en, .lang-fr .es { display: none; }
   </style>
 </head>
 <body class="lang-en">
   <div class="wrap">
     <header>
+      <div class="palms" aria-hidden="true">🌴 🥥 🌴</div>
       <h1>
         <span class="en">Welcome to Apto {{ apartment_label }}</span>
         <span class="es">Bienvenido al Apto {{ apartment_label }}</span>
+        <span class="fr">Bienvenue à l'Apto {{ apartment_label }}</span>
       </h1>
       <p>
         <span class="en">Need anything during your stay? Tap a service below.</span>
         <span class="es">¿Necesitas algo durante tu estadía? Toca un servicio.</span>
+        <span class="fr">Besoin de quelque chose pendant votre séjour ? Touchez un service.</span>
       </p>
     </header>
 
     <div class="lang-toggle" role="tablist" aria-label="Language">
       <button type="button" data-lang="en" class="active">EN</button>
       <button type="button" data-lang="es">ES</button>
+      <button type="button" data-lang="fr">FR</button>
     </div>
 
     {% for s in services %}
-      {% with msg_en="Hi! I'm staying at Apto "|add:apartment_label|add:". I'd like info about "|add:s.name_en|add:"." msg_es="Hola! Estoy en el Apto "|add:apartment_label|add:". Quisiera info sobre "|add:s.name_es|add:"." %}
+      {% with msg_en="Hi! I'm staying at Apto "|add:apartment_label|add:". I'd like info about "|add:s.name_en|add:"." msg_es="Hola! Estoy en el Apto "|add:apartment_label|add:". Quisiera info sobre "|add:s.name_es|add:"." msg_fr="Bonjour ! Je séjourne à l'Apto "|add:apartment_label|add:". Je voudrais des informations sur "|add:s.name_fr|add:"." %}
       <a class="service"
          href="https://wa.me/{{ business_number }}?text={{ msg_en|urlencode }}"
          data-href-en="https://wa.me/{{ business_number }}?text={{ msg_en|urlencode }}"
-         data-href-es="https://wa.me/{{ business_number }}?text={{ msg_es|urlencode }}">
+         data-href-es="https://wa.me/{{ business_number }}?text={{ msg_es|urlencode }}"
+         data-href-fr="https://wa.me/{{ business_number }}?text={{ msg_fr|urlencode }}">
         <h2>
           <span class="en">{{ s.name_en }}</span>
           <span class="es">{{ s.name_es }}</span>
+          <span class="fr">{{ s.name_fr|default:s.name_en }}</span>
         </h2>
-        {% if s.description_en or s.description_es %}
+        {% if s.description_en or s.description_es or s.description_fr %}
           <p>
             <span class="en">{{ s.description_en|default:s.description_es }}</span>
             <span class="es">{{ s.description_es|default:s.description_en }}</span>
+            <span class="fr">{{ s.description_fr|default:s.description_en }}</span>
           </p>
         {% endif %}
         <div class="cta">
           <span class="en">Open WhatsApp</span>
           <span class="es">Abrir WhatsApp</span>
+          <span class="fr">Ouvrir WhatsApp</span>
         </div>
       </a>
       {% endwith %}
@@ -94,28 +164,35 @@
     {% endfor %}
 
     <footer>
+      <span class="waves" aria-hidden="true">🌊 〰️ 🌊</span>
       {{ host_name }} · Bayahibe, RD
     </footer>
   </div>
 
   <script>
     (function () {
+      const SUPPORTED = ["en", "es", "fr"];
+      const DATASET_KEY = { en: "hrefEn", es: "hrefEs", fr: "hrefFr" };
       const body = document.body;
       const buttons = document.querySelectorAll(".lang-toggle button");
       const services = document.querySelectorAll(".service");
       function setLang(lang) {
-        body.classList.toggle("lang-en", lang === "en");
-        body.classList.toggle("lang-es", lang === "es");
+        if (!SUPPORTED.includes(lang)) lang = "en";
+        SUPPORTED.forEach(l => body.classList.toggle("lang-" + l, l === lang));
         buttons.forEach(b => b.classList.toggle("active", b.dataset.lang === lang));
-        services.forEach(a => { a.href = a.dataset["href" + (lang === "es" ? "Es" : "En")]; });
+        services.forEach(a => { a.href = a.dataset[DATASET_KEY[lang]] || a.dataset.hrefEn; });
         try { localStorage.setItem("guestlink:lang", lang); } catch (_) {}
       }
       buttons.forEach(b => b.addEventListener("click", () => setLang(b.dataset.lang)));
-      let initial = "en";
-      try { initial = localStorage.getItem("guestlink:lang") || initial; } catch (_) {}
-      if (initial !== "en" && initial !== "es") initial = "en";
-      const nav = (navigator.language || "").toLowerCase();
-      if (!localStorage.getItem("guestlink:lang") && nav.startsWith("es")) initial = "es";
+      let stored = null;
+      try { stored = localStorage.getItem("guestlink:lang"); } catch (_) {}
+      let initial = SUPPORTED.includes(stored) ? stored : null;
+      if (!initial) {
+        const nav = (navigator.language || "").toLowerCase();
+        if (nav.startsWith("es")) initial = "es";
+        else if (nav.startsWith("fr")) initial = "fr";
+        else initial = "en";
+      }
       setLang(initial);
     })();
   </script>

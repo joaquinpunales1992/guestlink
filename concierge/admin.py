@@ -9,7 +9,7 @@ from .models import Guest, Message, Provider, Service, Ticket
 class ServiceAdmin(admin.ModelAdmin):
     list_display = ("name_en", "slug", "default_provider", "expected_commission_usd", "active", "sort_order")
     list_filter = ("active",)
-    search_fields = ("name_en", "name_es", "slug", "keywords")
+    search_fields = ("name_en", "name_es", "name_fr", "slug", "keywords")
 
 
 @admin.register(Provider)

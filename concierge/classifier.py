@@ -71,7 +71,8 @@ def _classify_with_claude(message: str, services: list[Service]) -> Classificati
             "slug": s.slug,
             "name_en": s.name_en,
             "name_es": s.name_es,
-            "description": s.description_en or s.description_es,
+            "name_fr": s.name_fr,
+            "description": s.description_en or s.description_es or s.description_fr,
         }
         for s in services
     ]

@@ -17,8 +17,10 @@ class Service(models.Model):
     slug = models.SlugField(unique=True)
     name_en = models.CharField(max_length=120)
     name_es = models.CharField(max_length=120)
+    name_fr = models.CharField(max_length=120, blank=True)
     description_en = models.TextField(blank=True)
     description_es = models.TextField(blank=True)
+    description_fr = models.TextField(blank=True)
     keywords = models.TextField(
         blank=True,
         help_text="Comma-separated keywords used by the fallback classifier when no LLM is available.",

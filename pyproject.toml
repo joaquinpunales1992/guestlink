@@ -1,10 +1,14 @@
 [project]
 name = "guestlink"
 version = "0.1.0"
-requires-python = ">=3.13"
+# 3.10 is the floor Django 5.1 accepts. Kept low on purpose: cPanel shared
+# hosting only offers whatever Pythons CloudLinux ships, rarely the newest.
+requires-python = ">=3.10"
 dependencies = [
     "anthropic>=0.102.0",
     "django>=5.1",
+    "pillow>=12.2.0",
     "python-dotenv>=1.2.2",
     "requests>=2.34.2",
+    "whitenoise>=6.8",
 ]

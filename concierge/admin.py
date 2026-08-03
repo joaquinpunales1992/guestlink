@@ -2,7 +2,7 @@ from django.contrib import admin
 from django.urls import reverse
 from django.utils.html import format_html
 
-from .models import Guest, Message, Provider, Service, Ticket
+from .models import Guest, Message, Provider, Service, SiteSettings, Ticket
 
 
 @admin.register(Service)
@@ -64,6 +64,21 @@ class TicketAdmin(admin.ModelAdmin):
     def mark_cancelled(self, request, queryset):
         for t in queryset:
             t.close(Ticket.Status.CANCELLED)
+
+
+@admin.register(SiteSettings)
+class SiteSettingsAdmin(admin.ModelAdmin):
+    fieldsets = (
+        ("Tab & footer", {"fields": ("tab_title", "footer_text")}),
+        ("Headline (big h1)", {"fields": ("headline_en", "headline_es", "headline_fr")}),
+        ("Tagline (subtitle under h1)", {"fields": ("tagline_en", "tagline_es", "tagline_fr")}),
+    )
+
+    def has_add_permission(self, request) -> bool:
+        return not SiteSettings.objects.exists()
+
+    def has_delete_permission(self, request, obj=None) -> bool:
+        return False
 
 
 @admin.register(Message)

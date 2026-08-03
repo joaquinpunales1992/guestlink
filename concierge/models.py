@@ -21,6 +21,12 @@ class Service(models.Model):
     description_en = models.TextField(blank=True)
     description_es = models.TextField(blank=True)
     description_fr = models.TextField(blank=True)
+    image = models.ImageField(
+        upload_to="services/",
+        blank=True,
+        null=True,
+        help_text="Banner shown at the top of the service card on the landing page.",
+    )
     keywords = models.TextField(
         blank=True,
         help_text="Comma-separated keywords used by the fallback classifier when no LLM is available.",
@@ -124,6 +130,55 @@ class Ticket(models.Model):
     @property
     def is_active(self) -> bool:
         return self.status in {self.Status.OPEN, self.Status.IN_PROGRESS}
+
+
+class SiteSettings(models.Model):
+    """Singleton holding admin-editable copy for the guest-facing landing page."""
+
+    tab_title = models.CharField(max_length=120, help_text="Browser tab title (single string, language-neutral).")
+    footer_text = models.CharField(max_length=200, help_text="Line shown in the page footer.")
+    headline_en = models.CharField(max_length=160)
+    headline_es = models.CharField(max_length=160)
+    headline_fr = models.CharField(max_length=160, blank=True)
+    tagline_en = models.CharField(max_length=240, blank=True)
+    tagline_es = models.CharField(max_length=240, blank=True)
+    tagline_fr = models.CharField(max_length=240, blank=True)
+
+    class Meta:
+        verbose_name = "Site settings"
+        verbose_name_plural = "Site settings"
+
+    def __str__(self) -> str:
+        return self.tab_title or "Site settings"
+
+    def save(self, *args, **kwargs):
+        self.pk = 1
+        super().save(*args, **kwargs)
+
+    def delete(self, *args, **kwargs):
+        return  # singleton, deletion disabled
+
+    @classmethod
+    def load(cls) -> "SiteSettings":
+        obj, _ = cls.objects.get_or_create(pk=1, defaults=cls._defaults())
+        return obj
+
+    @classmethod
+    def _defaults(cls) -> dict:
+        from django.conf import settings as dj_settings
+
+        host = getattr(dj_settings, "HOST_NAME", "Host")
+        apt = getattr(dj_settings, "HOST_APARTMENT_LABEL", "1")
+        return {
+            "tab_title": f"{host} · Apto {apt} · Bayahibe",
+            "footer_text": f"{host} · Bayahibe, Dominican Republic",
+            "headline_en": f"Welcome to Apto {apt}",
+            "headline_es": f"Bienvenido al Apto {apt}",
+            "headline_fr": f"Bienvenue à l'Apto {apt}",
+            "tagline_en": "Whatever you need during your stay, we'll arrange it for you over WhatsApp.",
+            "tagline_es": "Lo que necesites durante tu estadía, lo coordinamos por WhatsApp.",
+            "tagline_fr": "Tout ce dont vous avez besoin pendant votre séjour, nous l'organisons sur WhatsApp.",
+        }
 
 
 class Message(models.Model):

@@ -3,171 +3,192 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ host_name }} · Apto {{ apartment_label }} · Bayahibe</title>
+  <title>{{ site.tab_title }}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Pacifico&family=Quicksand:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     :root {
-      --sky: #7fd8e8;
-      --sea: #0ea5b7;
-      --sea-deep: #075e6a;
-      --sand: #fdf2d6;
-      --sand-warm: #f5e3b8;
-      --coral: #ff6b5b;
-      --coral-deep: #e25244;
-      --palm: #1f7a4d;
-      --palm-light: #3aa874;
+      --petrol: #0d4650;
+      --sea: #17727f;
+      --sea-soft: #2f97a3;
+      --cream: #f6efe2;
+      --cream-2: #efe4d1;
+      --ink: #143840;
+      --muted: #5f7b81;
+      --terracotta: #d9694a;
+      --terracotta-deep: #bd5237;
+      --wa: #1fab54;
       --card: #ffffff;
-      --ink: #103641;
-      --muted: #5c7a83;
-      --border: rgba(15, 94, 106, 0.12);
+      --border: rgba(13, 70, 80, 0.10);
     }
     * { box-sizing: border-box; }
-    html, body { margin: 0; padding: 0; color: var(--ink);
-      font-family: "Quicksand", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-      font-weight: 500;
-      min-height: 100%;
+    html, body {
+      margin: 0; padding: 0; color: var(--ink);
+      font-family: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--cream);
+      -webkit-font-smoothing: antialiased;
+      overflow-x: hidden;
+    }
+    /* ---- hero ---- */
+    .hero {
+      position: relative;
+      padding: 28px 0 0;
       background:
-        radial-gradient(ellipse at top, var(--sky) 0%, transparent 55%),
-        linear-gradient(180deg, var(--sea) 0%, var(--sea) 35%, var(--sand) 65%, var(--sand-warm) 100%);
-      background-attachment: fixed;
-    }
-    body::before {
-      /* sun */
-      content: "";
-      position: fixed;
-      top: -60px; right: -60px;
-      width: 220px; height: 220px;
-      background: radial-gradient(circle, #ffd97a 0%, #ffb454 55%, rgba(255,180,84,0) 70%);
-      pointer-events: none;
-      z-index: 0;
-    }
-    body::after {
-      /* gentle wave divider behind cards */
-      content: "";
-      position: fixed;
-      left: 0; right: 0;
-      top: 42%;
-      height: 80px;
-      background:
-        radial-gradient(ellipse at 20% 0%, rgba(255,255,255,0.6) 0%, transparent 60%),
-        radial-gradient(ellipse at 70% 0%, rgba(255,255,255,0.45) 0%, transparent 60%);
-      pointer-events: none;
-      z-index: 0;
-    }
-    .wrap { position: relative; z-index: 1; max-width: 520px; margin: 0 auto; padding: 28px 16px 64px; }
-    header { text-align: center; padding: 8px 0 20px; color: #ffffff;
-      text-shadow: 0 2px 12px rgba(7, 94, 106, 0.35); }
-    .palms { font-size: 28px; letter-spacing: 6px; opacity: 0.95; }
-    header h1 { margin: 6px 0 0; font-family: "Pacifico", cursive; font-weight: 400;
-      font-size: 30px; line-height: 1.15; }
-    header p { margin: 8px 0 0; font-size: 14.5px; font-weight: 500;
-      color: rgba(255,255,255,0.95); }
-    .lang-toggle { display: flex; gap: 8px; justify-content: center; margin: 18px 0 22px; }
-    .lang-toggle button {
-      background: rgba(255,255,255,0.85); border: 1px solid rgba(255,255,255,0.6);
-      color: var(--sea-deep); padding: 7px 16px; border-radius: 999px;
-      font: 600 13px "Quicksand", sans-serif; cursor: pointer;
-      backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px);
-    }
-    .lang-toggle button.active { background: var(--coral); color: #fff;
-      border-color: var(--coral-deep); box-shadow: 0 4px 12px rgba(255,107,91,0.4); }
-    .service {
-      position: relative; display: block;
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-left: 5px solid var(--palm-light);
-      border-radius: 16px;
-      padding: 18px 18px 16px;
-      margin-bottom: 14px;
-      text-decoration: none;
-      color: var(--ink);
-      box-shadow: 0 10px 24px rgba(7, 94, 106, 0.12);
-      transition: transform 0.08s ease, box-shadow 0.15s ease;
+        radial-gradient(120% 90% at 78% -10%, rgba(47,151,163,0.55) 0%, transparent 55%),
+        linear-gradient(165deg, var(--sea) 0%, var(--petrol) 100%);
+      color: #fff;
       overflow: hidden;
     }
-    .service::after {
-      /* hibiscus dot */
-      content: ""; position: absolute; top: -22px; right: -22px;
-      width: 70px; height: 70px; border-radius: 50%;
-      background: radial-gradient(circle, rgba(255,107,91,0.18) 0%, rgba(255,107,91,0) 70%);
+    .hero-inner { max-width: 520px; margin: 0 auto; padding: 0 22px 44px; text-align: center; }
+    .eyebrow {
+      font-size: 11px; font-weight: 600; letter-spacing: 0.22em; text-transform: uppercase;
+      color: rgba(255,255,255,0.72);
     }
-    .service:active { transform: scale(0.99); }
-    .service:hover { box-shadow: 0 14px 30px rgba(7, 94, 106, 0.18); border-left-color: var(--palm); }
-    .service h2 { margin: 0; font-size: 18px; font-weight: 700; color: var(--sea-deep); }
-    .service p { margin: 6px 0 0; color: var(--muted); font-size: 14px; line-height: 1.45;
-      font-weight: 500; }
-    .cta { display: inline-flex; align-items: center; gap: 8px; margin-top: 12px;
-      color: #fff; background: var(--coral); padding: 7px 14px;
-      border-radius: 999px; font-size: 13px; font-weight: 700;
-      box-shadow: 0 4px 10px rgba(255,107,91,0.35); }
-    .cta::before { content: "🌺"; filter: drop-shadow(0 1px 0 rgba(0,0,0,0.1)); }
-    footer { text-align: center; color: var(--sea-deep); font-size: 13px;
-      margin-top: 32px; font-weight: 600; opacity: 0.85; }
-    footer .waves { display: block; font-size: 18px; letter-spacing: 4px; margin-bottom: 4px; }
+    .eyebrow::before, .eyebrow::after {
+      content: ""; display: inline-block; width: 20px; height: 1px; vertical-align: middle;
+      background: rgba(255,255,255,0.4); margin: 0 10px;
+    }
+    .hero h1 {
+      margin: 14px 0 0; font-family: "Fraunces", Georgia, serif;
+      font-weight: 400; font-style: italic;
+      font-size: clamp(30px, 9vw, 42px); line-height: 1.05; letter-spacing: -0.02em;
+      font-optical-sizing: auto; overflow-wrap: break-word;
+    }
+    .hero h1::after {
+      content: ""; display: block; width: 46px; height: 2px; margin: 14px auto 0;
+      background: var(--terracotta); border-radius: 2px; opacity: 0.9;
+    }
+    .hero .tagline {
+      margin: 12px auto 0; max-width: 30em; font-size: 15px; line-height: 1.5;
+      font-weight: 400; color: rgba(255,255,255,0.86);
+    }
+    .lang-toggle { display: inline-flex; gap: 4px; margin-top: 22px; padding: 4px;
+      background: rgba(255,255,255,0.12); border-radius: 999px;
+      backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
+    .lang-toggle button {
+      background: transparent; border: 0; color: rgba(255,255,255,0.85);
+      padding: 6px 15px; border-radius: 999px;
+      font: 600 12px "Manrope", sans-serif; letter-spacing: 0.04em; cursor: pointer;
+      transition: background 0.15s ease, color 0.15s ease;
+    }
+    .lang-toggle button.active { background: #fff; color: var(--petrol); }
+    .wave { display: block; width: 100%; height: 44px; margin-bottom: -1px; }
+    /* ---- content ---- */
+    .wrap { max-width: 520px; margin: 0 auto; padding: 22px 14px 40px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+    .service {
+      position: relative; display: flex; flex-direction: column;
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 18px; text-decoration: none; color: var(--ink);
+      box-shadow: 0 8px 22px rgba(13, 70, 80, 0.10);
+      transition: transform 0.1s ease, box-shadow 0.18s ease;
+      overflow: hidden;
+    }
+    .service:active { transform: scale(0.985); }
+    .service:hover { box-shadow: 0 14px 30px rgba(13, 70, 80, 0.16); }
+    .service .banner {
+      position: relative; width: 100%; aspect-ratio: 4 / 3;
+      background: linear-gradient(135deg, var(--sea-soft) 0%, var(--sea) 100%);
+      overflow: hidden;
+    }
+    .service .banner img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .service .body { padding: 12px 13px 13px; }
+    .service h2 {
+      margin: 0; font-family: "Fraunces", Georgia, serif; font-size: 17px; font-weight: 500;
+      color: var(--petrol); line-height: 1.2; letter-spacing: -0.005em;
+      display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+    .cta {
+      display: inline-flex; align-items: center; gap: 6px; margin-top: 9px;
+      font-size: 12px; font-weight: 600; color: var(--muted);
+    }
+    .cta svg { width: 15px; height: 15px; fill: var(--wa); flex: none; }
+    footer {
+      text-align: center; color: var(--muted); font-size: 12px; font-weight: 500;
+      margin-top: 30px; letter-spacing: 0.02em;
+    }
+    footer .rule {
+      display: block; width: 34px; height: 2px; margin: 0 auto 12px;
+      background: var(--terracotta); border-radius: 2px; opacity: 0.8;
+    }
+    @media (min-width: 460px) {
+      .hero h1 { font-size: 42px; }
+      .service h2 { font-size: 18px; }
+    }
     .lang-en .es, .lang-en .fr,
     .lang-es .en, .lang-es .fr,
     .lang-fr .en, .lang-fr .es { display: none; }
   </style>
 </head>
 <body class="lang-en">
-  <div class="wrap">
-    <header>
-      <div class="palms" aria-hidden="true">🌴 🥥 🌴</div>
+  <div class="hero">
+    <div class="hero-inner">
+      <div class="eyebrow">
+        <span class="en">Bayahibe · Dominican Republic</span>
+        <span class="es">Bayahibe · República Dominicana</span>
+        <span class="fr">Bayahibe · République Dominicaine</span>
+      </div>
       <h1>
-        <span class="en">Welcome to Apto {{ apartment_label }}</span>
-        <span class="es">Bienvenido al Apto {{ apartment_label }}</span>
-        <span class="fr">Bienvenue à l'Apto {{ apartment_label }}</span>
+        <span class="en">{{ site.headline_en }}</span>
+        <span class="es">{{ site.headline_es }}</span>
+        <span class="fr">{{ site.headline_fr|default:site.headline_en }}</span>
       </h1>
-      <p>
-        <span class="en">Need anything during your stay? Tap a service below.</span>
-        <span class="es">¿Necesitas algo durante tu estadía? Toca un servicio.</span>
-        <span class="fr">Besoin de quelque chose pendant votre séjour ? Touchez un service.</span>
+      <p class="tagline">
+        <span class="en">{{ site.tagline_en }}</span>
+        <span class="es">{{ site.tagline_es|default:site.tagline_en }}</span>
+        <span class="fr">{{ site.tagline_fr|default:site.tagline_en }}</span>
       </p>
-    </header>
-
-    <div class="lang-toggle" role="tablist" aria-label="Language">
-      <button type="button" data-lang="en" class="active">EN</button>
-      <button type="button" data-lang="es">ES</button>
-      <button type="button" data-lang="fr">FR</button>
+      <div class="lang-toggle" role="tablist" aria-label="Language">
+        <button type="button" data-lang="en" class="active">EN</button>
+        <button type="button" data-lang="es">ES</button>
+        <button type="button" data-lang="fr">FR</button>
+      </div>
     </div>
+    <svg class="wave" viewBox="0 0 1440 44" preserveAspectRatio="none" aria-hidden="true">
+      <path fill="#f6efe2" d="M0,22 C240,44 480,44 720,26 C960,8 1200,8 1440,26 L1440,44 L0,44 Z"></path>
+    </svg>
+  </div>
 
+  <main class="wrap">
+    <div class="grid">
     {% for s in services %}
       {% with msg_en="Hi! I'm staying at Apto "|add:apartment_label|add:". I'd like info about "|add:s.name_en|add:"." msg_es="Hola! Estoy en el Apto "|add:apartment_label|add:". Quisiera info sobre "|add:s.name_es|add:"." msg_fr="Bonjour ! Je séjourne à l'Apto "|add:apartment_label|add:". Je voudrais des informations sur "|add:s.name_fr|add:"." %}
       <a class="service"
          href="https://wa.me/{{ business_number }}?text={{ msg_en|urlencode }}"
          data-href-en="https://wa.me/{{ business_number }}?text={{ msg_en|urlencode }}"
          data-href-es="https://wa.me/{{ business_number }}?text={{ msg_es|urlencode }}"
-         data-href-fr="https://wa.me/{{ business_number }}?text={{ msg_fr|urlencode }}">
-        <h2>
-          <span class="en">{{ s.name_en }}</span>
-          <span class="es">{{ s.name_es }}</span>
-          <span class="fr">{{ s.name_fr|default:s.name_en }}</span>
-        </h2>
-        {% if s.description_en or s.description_es or s.description_fr %}
-          <p>
-            <span class="en">{{ s.description_en|default:s.description_es }}</span>
-            <span class="es">{{ s.description_es|default:s.description_en }}</span>
-            <span class="fr">{{ s.description_fr|default:s.description_en }}</span>
-          </p>
-        {% endif %}
-        <div class="cta">
-          <span class="en">Open WhatsApp</span>
-          <span class="es">Abrir WhatsApp</span>
-          <span class="fr">Ouvrir WhatsApp</span>
+         data-href-fr="https://wa.me/{{ business_number }}?text={{ msg_fr|urlencode }}"
+         aria-label="{{ s.name_en }} — open WhatsApp">
+        <div class="banner">
+          {% if s.image %}<img src="{{ s.image.url }}" alt="" loading="lazy">{% endif %}
+        </div>
+        <div class="body">
+          <h2>
+            <span class="en">{{ s.name_en }}</span>
+            <span class="es">{{ s.name_es }}</span>
+            <span class="fr">{{ s.name_fr|default:s.name_en }}</span>
+          </h2>
+          <span class="cta">
+            <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 .5C7.44.5.5 7.44.5 16c0 2.82.74 5.46 2.03 7.75L.5 31.5l7.94-2.02A15.4 15.4 0 0016 31.5C24.56 31.5 31.5 24.56 31.5 16S24.56.5 16 .5zm0 28.2c-2.5 0-4.85-.67-6.87-1.85l-.49-.29-4.71 1.2 1.26-4.58-.32-.5A12.6 12.6 0 013.3 16C3.3 8.98 8.98 3.3 16 3.3S28.7 8.98 28.7 16 23.02 28.7 16 28.7zm7.03-9.44c-.38-.19-2.26-1.11-2.61-1.24-.35-.13-.6-.19-.86.19-.25.38-.98 1.24-1.2 1.49-.22.25-.44.28-.82.09-.38-.19-1.61-.59-3.06-1.89-1.13-1.01-1.9-2.26-2.12-2.64-.22-.38-.02-.58.17-.77.17-.17.38-.44.57-.66.19-.22.25-.38.38-.63.13-.25.06-.47-.03-.66-.09-.19-.86-2.07-1.18-2.83-.31-.74-.62-.64-.86-.65l-.73-.01c-.25 0-.66.09-1.01.47-.35.38-1.32 1.29-1.32 3.15 0 1.86 1.35 3.66 1.54 3.91.19.25 2.66 4.06 6.44 5.7.9.39 1.6.62 2.15.79.9.29 1.72.25 2.37.15.72-.11 2.26-.92 2.58-1.81.32-.89.32-1.65.22-1.81-.09-.16-.35-.25-.73-.44z"></path></svg>
+            <span class="en">Arrange on WhatsApp</span>
+            <span class="es">Coordinar por WhatsApp</span>
+            <span class="fr">Organiser sur WhatsApp</span>
+          </span>
         </div>
       </a>
       {% endwith %}
     {% empty %}
-      <p style="text-align:center;color:var(--muted)">No services configured yet.</p>
+      <p style="grid-column:1/-1;text-align:center;color:var(--muted)">No services configured yet.</p>
     {% endfor %}
+    </div>
 
     <footer>
-      <span class="waves" aria-hidden="true">🌊 〰️ 🌊</span>
-      {{ host_name }} · Bayahibe, RD
+      <span class="rule" aria-hidden="true"></span>
+      {{ site.footer_text }}
     </footer>
-  </div>
+  </main>
 
   <script>
     (function () {

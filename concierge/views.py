@@ -13,7 +13,7 @@ from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from .models import Service, Ticket
+from .models import Service, SiteSettings, Ticket
 from .relay import handle_inbound
 
 logger = logging.getLogger(__name__)
@@ -86,6 +86,7 @@ def landing(request: HttpRequest) -> HttpResponse:
             "business_number": business_number,
             "host_name": settings.HOST_NAME,
             "apartment_label": settings.HOST_APARTMENT_LABEL,
+            "site": SiteSettings.load(),
         },
     )
 

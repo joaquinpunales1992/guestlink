@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>The Reef · framed card (13 × 18 cm)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,400&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --petrol: #0d4650;
+      --sea: #17727f;
+      --sea-soft: #2f97a3;
+      --cream: #f6efe2;
+      --ink: #143840;
+      --muted: #5f7b81;
+      --terracotta: #d9694a;
+      --wa: #1fab54;
+    }
+    @page { size: 130mm 180mm; margin: 0; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; background: #d9d4c8; }
+    body {
+      font-family: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: var(--ink);
+      -webkit-font-smoothing: antialiased;
+      display: flex; justify-content: center; align-items: flex-start;
+    }
+    .card {
+      position: relative;
+      width: 130mm; height: 180mm;
+      background: var(--cream);
+      overflow: hidden;
+      -webkit-print-color-adjust: exact; print-color-adjust: exact;
+      display: flex; flex-direction: column;
+    }
+    /* ---- hero ---- */
+    .hero {
+      position: relative;
+      padding: 11mm 12mm 0; text-align: center; color: #fff;
+      background:
+        radial-gradient(120% 90% at 78% -10%, rgba(47,151,163,0.55) 0%, transparent 55%),
+        linear-gradient(165deg, var(--sea) 0%, var(--petrol) 100%);
+    }
+    .eyebrow {
+      font-size: 9pt; font-weight: 600; letter-spacing: 0.22em; text-transform: uppercase;
+      color: rgba(255,255,255,0.75);
+    }
+    .hero h1 {
+      margin: 4mm 0 0; font-family: "Fraunces", Georgia, serif;
+      font-weight: 400; font-style: italic; font-size: 30pt; line-height: 1.02;
+      letter-spacing: -0.02em;
+    }
+    .hero h1::after {
+      content: ""; display: block; width: 18mm; height: 0.9mm; margin: 4mm auto 0;
+      background: var(--terracotta); border-radius: 1mm;
+    }
+    .wave { display: block; width: 100%; height: 8mm; margin-top: 5mm; }
+    /* ---- body ---- */
+    .content {
+      flex: 1; display: flex; flex-direction: column; align-items: center;
+      justify-content: center; padding: 2mm 12mm 2mm; text-align: center;
+    }
+    .prompt { font-family: "Fraunces", Georgia, serif; font-weight: 600; font-size: 18pt;
+      color: var(--petrol); line-height: 1.14; }
+    .prompt-sub { margin-top: 2.5mm; font-size: 9pt; font-weight: 500; color: var(--muted); line-height: 1.45; }
+    .qr-panel {
+      margin: 13mm 0 4mm; padding: 6mm; background: #fff; border-radius: 4mm;
+      box-shadow: 0 2mm 8mm rgba(13,70,80,0.14);
+    }
+    .qr { display: block; width: 52mm; height: 52mm; }
+    .wa-line {
+      display: inline-flex; align-items: center; gap: 3mm;
+      font-size: 12pt; font-weight: 600; color: var(--ink);
+    }
+    .wa-line svg { width: 6mm; height: 6mm; fill: var(--wa); }
+    /* ---- footer ---- */
+    .foot {
+      padding: 0 12mm 7mm; text-align: center;
+      font-size: 9.5pt; font-weight: 600; letter-spacing: 0.05em; color: var(--muted);
+    }
+    .foot .dot { color: var(--terracotta); }
+    /* screen-only preview backdrop */
+    @media screen {
+      body { padding: 24px; background: #d9d4c8; }
+      .card { box-shadow: 0 12px 40px rgba(0,0,0,0.25); border-radius: 3mm; }
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="hero">
+      <div class="eyebrow">Bayahibe · Dominican Republic</div>
+      <h1>Welcome to<br>The Reef</h1>
+      <svg class="wave" viewBox="0 0 1440 44" preserveAspectRatio="none" aria-hidden="true">
+        <path fill="#f6efe2" d="M0,22 C240,44 480,44 720,26 C960,8 1200,8 1440,26 L1440,44 L0,44 Z"></path>
+      </svg>
+    </div>
+
+    <div class="content">
+      <div class="prompt">Scan for anything you need</div>
+      <div class="prompt-sub">Escanea lo que necesites · Scannez ce dont vous avez besoin</div>
+
+      <!-- QR payload: https://bookyourtickets.online/the-reef-401 · segno, version 4, error correction Q -->
+      <div class="qr-panel">
+        <svg class="qr" viewBox="0 0 37 37" preserveAspectRatio="xMidYMid meet" shape-rendering="crispEdges" role="img" aria-label="Scan to open the concierge page"><path class="qrline" stroke="#0d4650" d="M2 2.5h7m2 0h2m3 0h2m1 0h1m1 0h3m1 0h1m2 0h7m-33 1h1m5 0h1m1 0h1m5 0h2m2 0h1m3 0h3m1 0h1m5 0h1m-33 1h1m1 0h3m1 0h1m1 0h1m2 0h1m4 0h2m1 0h2m5 0h1m1 0h3m1 0h1m-33 1h1m1 0h3m1 0h1m2 0h2m2 0h1m2 0h1m5 0h3m1 0h1m1 0h3m1 0h1m-33 1h1m1 0h3m1 0h1m3 0h3m2 0h1m1 0h1m2 0h2m2 0h1m1 0h1m1 0h3m1 0h1m-33 1h1m5 0h1m2 0h1m1 0h1m2 0h1m3 0h2m1 0h1m4 0h1m5 0h1m-33 1h7m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h1m1 0h7m-21 1h2m1 0h3m2 0h1m1 0h1m-22 1h3m1 0h2m7 0h2m1 0h3m1 0h1m2 0h1m5 0h2m-32 1h1m2 0h1m5 0h2m3 0h2m3 0h5m2 0h2m1 0h2m1 0h1m-33 1h2m2 0h1m1 0h1m1 0h1m1 0h1m2 0h1m1 0h1m1 0h1m4 0h4m1 0h3m1 0h2m-32 1h1m5 0h1m2 0h2m1 0h4m1 0h1m4 0h1m2 0h2m1 0h1m2 0h1m-33 1h1m1 0h1m1 0h1m1 0h1m2 0h1m2 0h2m1 0h1m2 0h2m2 0h2m1 0h1m1 0h3m1 0h2m-31 1h4m2 0h2m1 0h4m3 0h1m1 0h1m3 0h2m4 0h2m-31 1h1m2 0h1m1 0h2m2 0h2m3 0h1m3 0h2m3 0h1m1 0h3m1 0h1m-30 1h1m1 0h3m4 0h3m1 0h1m1 0h1m1 0h1m2 0h2m2 0h2m2 0h2m-26 1h4m1 0h2m1 0h2m1 0h2m2 0h3m2 0h2m1 0h3m-31 1h2m5 0h2m1 0h1m4 0h3m2 0h1m2 0h4m1 0h2m1 0h2m-28 1h2m1 0h5m1 0h4m2 0h1m1 0h1m2 0h1m1 0h2m1 0h2m-31 1h2m2 0h1m1 0h2m1 0h11m3 0h1m1 0h1m1 0h1m-29 1h4m2 0h3m2 0h1m4 0h2m1 0h5m5 0h2m1 0h1m-33 1h3m1 0h1m2 0h3m1 0h1m3 0h2m1 0h2m1 0h1m1 0h2m1 0h1m2 0h1m2 0h1m-29 1h1m1 0h1m1 0h3m3 0h2m4 0h2m1 0h2m1 0h1m1 0h2m1 0h2m-32 1h1m1 0h2m4 0h1m1 0h3m2 0h2m1 0h1m2 0h1m1 0h4m1 0h1m2 0h1m-33 1h1m1 0h2m1 0h6m1 0h1m1 0h2m6 0h1m1 0h5m3 0h1m-25 1h1m2 0h2m4 0h1m1 0h1m1 0h4m3 0h2m-30 1h7m3 0h3m1 0h1m2 0h4m2 0h2m1 0h1m1 0h1m2 0h1m-32 1h1m5 0h1m1 0h3m2 0h1m3 0h1m3 0h4m3 0h5m-33 1h1m1 0h3m1 0h1m2 0h1m1 0h1m2 0h2m3 0h1m1 0h1m1 0h6m1 0h1m1 0h1m-33 1h1m1 0h3m1 0h1m1 0h1m1 0h3m3 0h2m5 0h2m2 0h1m2 0h3m-33 1h1m1 0h3m1 0h1m1 0h1m4 0h3m1 0h2m2 0h3m2 0h2m1 0h2m-31 1h1m5 0h1m1 0h1m1 0h4m3 0h2m4 0h2m2 0h2m3 0h1m-33 1h7m3 0h1m1 0h1m1 0h1m1 0h1m2 0h1m1 0h1m1 0h1m1 0h1m2 0h1m1 0h1"/></svg>
+      </div>
+
+      <span class="wa-line">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 .5C7.44.5.5 7.44.5 16c0 2.82.74 5.46 2.03 7.75L.5 31.5l7.94-2.02A15.4 15.4 0 0016 31.5C24.56 31.5 31.5 24.56 31.5 16S24.56.5 16 .5zm0 28.2c-2.5 0-4.85-.67-6.87-1.85l-.49-.29-4.71 1.2 1.26-4.58-.32-.5A12.6 12.6 0 013.3 16C3.3 8.98 8.98 3.3 16 3.3S28.7 8.98 28.7 16 23.02 28.7 16 28.7zm7.03-9.44c-.38-.19-2.26-1.11-2.61-1.24-.35-.13-.6-.19-.86.19-.25.38-.98 1.24-1.2 1.49-.22.25-.44.28-.82.09-.38-.19-1.61-.59-3.06-1.89-1.13-1.01-1.9-2.26-2.12-2.64-.22-.38-.02-.58.17-.77.17-.17.38-.44.57-.66.19-.22.25-.38.38-.63.13-.25.06-.47-.03-.66-.09-.19-.86-2.07-1.18-2.83-.31-.74-.62-.64-.86-.65l-.73-.01c-.25 0-.66.09-1.01.47-.35.38-1.32 1.29-1.32 3.15 0 1.86 1.35 3.66 1.54 3.91.19.25 2.66 4.06 6.44 5.7.9.39 1.6.62 2.15.79.9.29 1.72.25 2.37.15.72-.11 2.26-.92 2.58-1.81.32-.89.32-1.65.22-1.81-.09-.16-.35-.25-.73-.44z"></path></svg>
+        We'll help you on WhatsApp
+      </span>
+    </div>
+
+    <div class="foot">The Reef <span class="dot">·</span> Bayahibe, Dominican Republic</div>
+  </div>
+</body>
+</html>

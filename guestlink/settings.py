@@ -21,11 +21,19 @@ def _env_list(key: str, default: str = "") -> list[str]:
 DEBUG = _env_bool("DJANGO_DEBUG", True)
 
 _INSECURE_KEY = "django-insecure-l)=$30y67zj(m+u8o1u3+pqs5f=r*0++-hxhi80(d%xsml($eu"
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", _INSECURE_KEY)
+# `.env.production.example` ships the key blank, so the common mistake is a
+# present-but-empty variable. `os.environ.get` returns "" for that, not the
+# default — without `or`, Django would accept it here and only fail much later
+# with "SECRET_KEY must not be empty" from inside the error handler.
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "") or _INSECURE_KEY
 if not DEBUG and SECRET_KEY == _INSECURE_KEY:
     # This key is committed to git. Running production on it would let anyone
     # forge session cookies and log in as the host.
-    raise ImproperlyConfigured("DJANGO_SECRET_KEY must be set when DJANGO_DEBUG=0")
+    raise ImproperlyConfigured(
+        "DJANGO_SECRET_KEY must be set to a non-empty value when DJANGO_DEBUG=0. "
+        "Generate one with: python -c "
+        "'from django.core.management.utils import get_random_secret_key as k; print(k())'"
+    )
 
 ALLOWED_HOSTS = _env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
 

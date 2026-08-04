@@ -2,77 +2,67 @@
 
 Target: `https://bookyourtickets.online` on a Namecheap cPanel shared plan.
 
-Concrete values for this account — substitute if anything differs:
-
 | Thing | Value |
 | --- | --- |
-| cPanel user | `bookyoq0` |
-| Home | `/home/bookyoq0` |
-| Application root (code) | `/home/bookyoq0/guestlink` |
-| Document root (web) | `/home/bookyoq0/bookyourtickets.online` |
-| Virtualenv | `/home/bookyoq0/virtualenv/guestlink/3.13` |
-| Python | 3.13 → Django 6.0.x (same as local dev) |
+| cPanel user | `akiyuvpp` (verify with `echo $HOME`) |
+| Application root (code) | `~/guestlink` |
+| Document root (web) | `~/bookyourtickets.online` |
+| Virtualenv | `~/virtualenv/guestlink/3.9` |
+| Python | 3.9.23 — the highest the cPanel selector offers |
+| Django | 4.2 LTS — the last release supporting Python 3.9 |
 
-The code lives **outside** the document root on purpose. The SQLite database sits
-next to the code, so nothing the web server can serve directly touches it.
+Commands below use `~` so they work regardless of the exact username. The code
+lives **outside** the document root on purpose, and the SQLite database sits
+next to the code, so nothing web-servable touches it.
 
 ---
 
-## 0. Prerequisites (already done)
+## Already done
 
 - DNS: nameservers `dns1/dns2.namecheaphosting.com`, A record → `162.255.119.223`
-- Domain created in cPanel → Domains with docroot `/bookyourtickets.online`
-- Python app created via Setup Python App
+- Domain created in cPanel → Domains, document root `/bookyourtickets.online`
+- **Valid SSL certificate** (SSL.com via AutoSSL, expires 2027-02-17)
+- HTTP → HTTPS redirect active
+- Python app registered in Setup Python App
 
----
+## Step 1 — Switch the app to Python 3.9.23
 
-## 1. Protect the ACME path before anything else
+The app was created on **3.6.15**, which cannot run this stack: Django 4.2 needs
+3.9+, and the `anthropic` SDK needs 3.8+. `pip install` fails on the first
+package.
+
+Setup Python App → open `guestlink` → change **Python version** to **3.9.23** →
+Save. cPanel rebuilds the virtualenv (nothing is installed in the 3.6 one, so
+nothing is lost). Confirm the shell prompt afterwards reads `((guestlink:3.9))`.
+
+## Step 2 — Protect the ACME path
 
 cPanel's Passenger `.htaccess` hands every request to Django, including the
-`/.well-known/` files AutoSSL uses to prove domain ownership. Without this,
-certificate issuance *and* every 90-day renewal fails silently.
+`/.well-known/` files AutoSSL uses to prove domain ownership. Without this the
+certificate fails to renew — silently, in February.
 
-Edit `/home/bookyoq0/bookyourtickets.online/.htaccess` and put these two lines
-**above** the `PassengerAppRoot` block:
+Edit `~/bookyourtickets.online/.htaccess` and put these lines **above** the
+`PassengerAppRoot` block:
 
 ```apache
 RewriteEngine On
 RewriteRule ^\.well-known/ - [L]
 ```
 
-## 2. Issue the certificate
+Re-add this after any change made in Setup Python App — cPanel rewrites that
+file and will drop the rule.
 
-cPanel → **SSL/TLS Status** → tick `bookyourtickets.online` and
-`www.bookyourtickets.online` → **Run AutoSSL**.
+## Step 3 — Get the code onto the server
 
-Verify from anywhere:
-
-```bash
-curl -I https://bookyourtickets.online/
-```
-
-> **Known blocker on this account:** port 443 currently times out from outside
-> while port 80 answers. If it is still closed after AutoSSL, this is not a
-> setting you can fix — open a Namecheap ticket: *"port 443 is not responding
-> for bookyourtickets.online on shared IP 162.255.119.223; port 80 works."*
-> No HTTPS means no WhatsApp webhook, so this gates everything below.
-
-Once the cert is live, turn on **Force HTTPS Redirect** in cPanel → Domains.
-Do not set `DJANGO_SECURE_SSL_REDIRECT=1` as well — two redirect layers is how
-you get a loop.
-
-## 3. Get the code onto the server
-
-cPanel → **Terminal**. The repo is private, so authenticate with a GitHub
-deploy key rather than pasting a token into `.git/config`:
+The repo is **private**, so cloning needs a deploy key. In cPanel → Terminal:
 
 ```bash
-ssh-keygen -t ed25519 -C "bookyoq0-guestlink" -f ~/.ssh/github_guestlink -N ""
+ssh-keygen -t ed25519 -C "guestlink-deploy" -f ~/.ssh/github_guestlink -N ""
 cat ~/.ssh/github_guestlink.pub
 ```
 
-Add that public key at GitHub → repo **guestlink** → Settings → Deploy keys →
-Add deploy key (read-only is enough). Then:
+Add that public key at GitHub → **guestlink** → Settings → Deploy keys (read-only
+is enough). Then:
 
 ```bash
 cat >> ~/.ssh/config <<'EOF'
@@ -83,63 +73,63 @@ EOF
 chmod 600 ~/.ssh/config
 ```
 
-Setup Python App already created `/home/bookyoq0/guestlink` with a stub
-`passenger_wsgi.py`. Clone into a temp dir and move the contents in, so cPanel's
-own app registration is left intact:
+Setup Python App already created `~/guestlink` with a stub `passenger_wsgi.py`.
+Clone to a temp directory and copy the contents in, leaving cPanel's app
+registration intact:
 
 ```bash
 git clone git@github.com:joaquinpunales1992/guestlink.git ~/src-guestlink
-cp -r ~/src-guestlink/. /home/bookyoq0/guestlink/
+cp -r ~/src-guestlink/. ~/guestlink/
 rm -rf ~/src-guestlink
 ```
 
-The repo's `passenger_wsgi.py` intentionally overwrites cPanel's stub.
+The repo's `passenger_wsgi.py` intentionally replaces cPanel's stub.
 
-For later updates:
+Later updates: `cd ~/guestlink && git pull`
 
-```bash
-cd /home/bookyoq0/guestlink && git pull
-```
-
-## 4. Install dependencies
+## Step 4 — Install dependencies
 
 ```bash
-source /home/bookyoq0/virtualenv/guestlink/3.13/bin/activate
-cd /home/bookyoq0/guestlink
+source ~/virtualenv/guestlink/3.9/bin/activate
+cd ~/guestlink
 pip install -r requirements.txt
 ```
 
-`uv` is not available on shared hosting — that is what `requirements.txt` is
-for. Keep it in sync with `pyproject.toml` when you add a dependency.
+`uv` is not available on shared hosting — that is what `requirements.txt` is for.
+Keep it in sync with `pyproject.toml` when adding a dependency.
 
-## 5. Create the production `.env`
+Expected versions on 3.9: Django 4.2.30, anthropic 0.120.x, Pillow 11.3.x,
+whitenoise 6.11.x.
+
+## Step 5 — Create the production `.env`
 
 ```bash
 cp .env.production.example .env
 python -c "from django.core.management.utils import get_random_secret_key as k; print(k())"
 python -c "import secrets; print(secrets.token_urlsafe(32))"   # verify token
+echo $HOME    # confirm the absolute paths below
 nano .env
 ```
 
-Fill in at minimum:
+Minimum to fill in (substitute your real `$HOME`):
 
 ```
 DJANGO_SECRET_KEY=<first command's output>
 DJANGO_DEBUG=0
 DJANGO_ALLOWED_HOSTS=bookyourtickets.online,www.bookyourtickets.online
 DJANGO_CSRF_TRUSTED_ORIGINS=https://bookyourtickets.online,https://www.bookyourtickets.online
-DJANGO_DB_PATH=/home/bookyoq0/guestlink/db.sqlite3
-DJANGO_STATIC_ROOT=/home/bookyoq0/guestlink/staticfiles
-DJANGO_MEDIA_ROOT=/home/bookyoq0/guestlink/media
+DJANGO_DB_PATH=/home/akiyuvpp/guestlink/db.sqlite3
+DJANGO_STATIC_ROOT=/home/akiyuvpp/guestlink/staticfiles
+DJANGO_MEDIA_ROOT=/home/akiyuvpp/guestlink/media
 WHATSAPP_VERIFY_TOKEN=<second command's output>
 WHATSAPP_DRY_RUN=1
 ```
 
 `.env` is gitignored and must never be committed. Settings refuse to boot with
-`DEBUG=0` and the committed placeholder secret key, so a missing key fails loudly
-rather than shipping a forgeable session cookie.
+`DEBUG=0` while the committed placeholder secret key is still in use, so a
+missing key fails loudly rather than shipping a forgeable session cookie.
 
-## 6. Migrate, collect static, create the admin user
+## Step 6 — Migrate, collect static, create the admin user
 
 ```bash
 python manage.py migrate
@@ -147,83 +137,98 @@ python manage.py collectstatic --noinput
 python manage.py createsuperuser
 ```
 
-Static files are served by WhiteNoise from inside the WSGI app, and `/media/` is
-served by Django. Neither needs an Apache rule, which is why the empty docroot
-is fine.
+Static files are served by WhiteNoise from inside the WSGI app and `/media/` by
+Django, so neither needs an Apache rule.
 
-## 7. Pre-flight check
+## Step 7 — Pre-flight check
 
 ```bash
 python manage.py check_deploy
 ```
 
-This verifies config, file permissions, and — the real shared-hosting unknown —
-whether outbound HTTPS to `graph.facebook.com` and `api.anthropic.com` is
-permitted. If those probes fail, the relay will accept webhooks and create
-tickets but never deliver a single message. Exit code is non-zero on failure.
+Verifies the interpreter, config, file permissions, and — the real
+shared-hosting unknown — whether outbound HTTPS to `graph.facebook.com` and
+`api.anthropic.com` is permitted. If those probes fail, the relay accepts
+webhooks and creates tickets but never delivers a message, which is invisible
+from the outside. Non-zero exit on failure.
 
-## 8. Restart Passenger
-
-Code changes are not picked up until the app restarts:
+## Step 8 — Restart Passenger
 
 ```bash
-mkdir -p /home/bookyoq0/guestlink/tmp
-touch /home/bookyoq0/guestlink/tmp/restart.txt
+mkdir -p ~/guestlink/tmp && touch ~/guestlink/tmp/restart.txt
 ```
 
-Or use the **Restart** button in Setup Python App.
+Or the **Restart** button in Setup Python App. Code changes do nothing until
+this happens.
 
-## 9. Smoke test
+## Step 9 — Smoke test
 
 ```bash
 curl -s https://bookyourtickets.online/healthz/
-curl -sI https://bookyourtickets.online/the-reef-401 | head -1
+curl -so /dev/null -w "%{http_code}\n" https://bookyourtickets.online/nonexistent-xyz
 ```
 
-- `/` and `/the-reef-401` → the landing page. **`/the-reef-401` is the URL baked
-  into the printed QR cards in `print/`** — verify it returns 200, not 404.
-- `/admin/` → log in with the superuser you just made.
+`/healthz/` must return JSON, and a nonsense URL must return **404**. While the
+cPanel placeholder is still active, *every* URL returns 200 with
+`It works! Python v3.6.15` — that 404 is how you know Django is actually live.
 
-## 10. Register the webhook with Meta
+Then check `/` and `/the-reef-401` render the landing page, and log in at
+`/admin/`.
 
-Only after HTTPS is confirmed working.
+## Step 10 — Register the webhook with Meta
 
 - Callback URL: `https://bookyourtickets.online/webhook/whatsapp/`
 - Verify token: exactly the `WHATSAPP_VERIFY_TOKEN` from `.env`
 - Subscribe to the **messages** field
 
-Meta immediately GETs the callback to verify. Then fill in
-`WHATSAPP_PHONE_NUMBER_ID`, `WHATSAPP_BUSINESS_NUMBER`, `WHATSAPP_ACCESS_TOKEN`,
-flip `WHATSAPP_DRY_RUN=0`, and restart Passenger.
+Meta immediately GETs the callback with a `hub.challenge` and requires that value
+echoed back verbatim. Then fill in `WHATSAPP_PHONE_NUMBER_ID`,
+`WHATSAPP_BUSINESS_NUMBER`, `WHATSAPP_ACCESS_TOKEN`, set `WHATSAPP_DRY_RUN=0`,
+and restart Passenger.
 
 ---
 
-## Known limitations of this setup
+## Known limitations
+
+**Django 4.2 is past end-of-life (April 2026).** It receives no security
+patches. This is the cost of Namecheap's Python selector capping at 3.9, and it
+is the most significant compromise in this deployment. `check_deploy` prints a
+standing reminder.
+
+Newer interpreters *are* installed on the server — `/opt/alt/python310` through
+`/opt/alt/python313` — they are simply not exposed by the cPanel selector. Two
+ways to reach a supported Django later:
+
+1. Ask Namecheap support to expose 3.11+ in the Python selector, then bump
+   `requirements.txt`/`pyproject.toml` to Django 5.2 LTS (supported to 2028).
+2. Override the interpreter yourself with `PassengerPython
+   "/opt/alt/python313/bin/python3"` in the docroot `.htaccess` and build the
+   virtualenv by hand. Works, but cPanel overwrites that file whenever the app
+   is edited, silently reverting you to the selector's Python.
 
 **Webhook latency.** `handle_inbound` classifies with Claude and calls the Graph
-API synchronously inside the request. On shared hosting that can take several
-seconds; Meta retries webhooks it considers slow, which can duplicate tickets.
-If that shows up in practice, move the relay work to a thread or a queue and
-return 200 immediately.
+API synchronously inside the request. On shared hosting that can take seconds;
+Meta retries webhooks it considers slow, which can duplicate tickets. If that
+appears in practice, move the relay work off the request path and return 200
+immediately.
 
 **SQLite under Passenger.** Passenger may run several worker processes against
-one SQLite file. Fine at one-apartment volume (a 20s busy timeout is set), but
-it is the first thing to outgrow.
+one SQLite file. Fine at one-apartment volume (20s busy timeout set), but the
+first thing to outgrow.
 
-**No background jobs.** Follow-up automation from the README's roadmap needs
-cPanel cron, not a long-running worker.
-
-**Deploys are not atomic.** `git pull` + restart has a brief window of mixed
-state. Irrelevant at this scale, worth knowing.
+**No background jobs.** Follow-up automation from the README roadmap needs cPanel
+cron, not a long-running worker.
 
 ## Troubleshooting
 
 | Symptom | Cause |
 | --- | --- |
-| 500 on every page | Check `stderr` in Setup Python App, or `~/guestlink/tmp/`. Usually a missing `.env` value. |
+| Every URL returns `It works! Python v3.6.15` | Placeholder still active — code not deployed, or Passenger not restarted. |
+| `pip install` fails on the first package | Still on Python 3.6/3.7/3.8. Switch the app to 3.9.23 (step 1). |
+| 500 on every page | Check stderr in Setup Python App, or `~/guestlink/tmp/`. Usually a missing `.env` value. |
 | Static files 404 | `collectstatic` not run, or `DJANGO_STATIC_ROOT` unwritable. |
 | Admin login "CSRF verification failed" | `DJANGO_CSRF_TRUSTED_ORIGINS` missing the `https://` scheme. |
-| Infinite redirect loop | Force HTTPS Redirect *and* `DJANGO_SECURE_SSL_REDIRECT=1` both on. Turn the Django one off. |
-| Code changes do nothing | Passenger not restarted — `touch tmp/restart.txt`. |
-| AutoSSL renewal fails | The `.well-known` rule in step 1 is missing from `.htaccess`. |
+| Infinite redirect loop | cPanel Force HTTPS Redirect *and* `DJANGO_SECURE_SSL_REDIRECT=1` both on. Turn the Django one off. |
+| Code changes do nothing | Passenger not restarted — `touch ~/guestlink/tmp/restart.txt`. |
+| AutoSSL renewal fails | The `.well-known` rule (step 2) is missing from `.htaccess`. |
 | Tickets created, nothing delivered | Outbound HTTPS blocked — run `check_deploy`. |

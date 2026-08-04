@@ -4,6 +4,8 @@ Runs with WHATSAPP_DRY_RUN=1 (default) so no network calls are made — outbound
 messages are still persisted as Message rows, which is what we assert against.
 """
 
+from __future__ import annotations
+
 from unittest.mock import patch
 
 from django.test import TestCase, override_settings

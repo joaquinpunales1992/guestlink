@@ -66,12 +66,21 @@ class Command(BaseCommand):
         f = 0
         self.stdout.write(f"  python {platform.python_version()} at {sys.executable}")
         self.stdout.write(f"  django {django.get_version()}")
-        if sys.version_info < (3, 10):
-            f += self._bad("Django 5.2 needs Python >= 3.10. Pick a newer interpreter in cPanel.")
-        elif sys.version_info < (3, 12):
-            f += self._warn("Python < 3.12 means Django 5.2 LTS here vs 6.0 in local dev")
+        if sys.version_info < (3, 9):
+            f += self._bad("Django 4.2 needs Python >= 3.9 — select 3.9.23 in the cPanel Python selector")
+        elif sys.version_info[:2] != (3, 9):
+            f += self._warn(
+                f"Running 3.{sys.version_info.minor}, but requirements.txt is pinned for 3.9"
+            )
         else:
-            f += self._ok("Python matches the Django major used in local dev")
+            f += self._ok("Python 3.9 as expected")
+
+        if django.VERSION[:2] != (4, 2):
+            f += self._warn(f"Django {django.get_version()} differs from the pinned 4.2 LTS")
+        else:
+            # Deliberately always warns: a standing reminder of the tradeoff
+            # accepted to fit Python 3.9. Not a failure.
+            f += self._warn("Django 4.2 LTS is past EOL (April 2026) — no security patches")
         return f
 
     def _section_config(self) -> int:

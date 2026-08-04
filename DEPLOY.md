@@ -105,16 +105,21 @@ whitenoise 6.11.x.
 
 ```bash
 cp .env.production.example .env
-python -c "from django.core.management.utils import get_random_secret_key as k; print(k())"
 python -c "import secrets; print(secrets.token_urlsafe(32))"   # verify token
 echo $HOME    # confirm the absolute paths below
 nano .env
 ```
 
+**You do not need to generate a secret key.** With `DJANGO_SECRET_KEY` left
+blank and `DEBUG=0`, settings mints one on first boot and stores it in
+`~/guestlink/.secret_key` (mode 0600, gitignored, outside the docroot). Set the
+variable only if you want to manage the key yourself — a non-empty value always
+wins over the file. Deleting `.secret_key` mints a new one and logs out every
+session.
+
 Minimum to fill in (substitute your real `$HOME`):
 
 ```
-DJANGO_SECRET_KEY=<first command's output>
 DJANGO_DEBUG=0
 DJANGO_ALLOWED_HOSTS=bookyourtickets.online,www.bookyourtickets.online
 DJANGO_CSRF_TRUSTED_ORIGINS=https://bookyourtickets.online,https://www.bookyourtickets.online
@@ -125,9 +130,10 @@ WHATSAPP_VERIFY_TOKEN=<second command's output>
 WHATSAPP_DRY_RUN=1
 ```
 
-`.env` is gitignored and must never be committed. Settings refuse to boot with
-`DEBUG=0` while the committed placeholder secret key is still in use, so a
-missing key fails loudly rather than shipping a forgeable session cookie.
+`.env` is gitignored and must never be committed. The committed placeholder
+secret key is never used when `DEBUG=0` — production always gets either your
+explicit key or the provisioned one, so a forgeable session cookie cannot ship
+by accident.
 
 ## Step 6 — Migrate, collect static, create the admin user
 

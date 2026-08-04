@@ -1,6 +1,7 @@
 """Django settings for guestlink."""
 
 import os
+import secrets
 from pathlib import Path
 
 from django.core.exceptions import ImproperlyConfigured
@@ -20,20 +21,62 @@ def _env_list(key: str, default: str = "") -> list[str]:
 
 DEBUG = _env_bool("DJANGO_DEBUG", True)
 
+# Committed to git, so it is only ever acceptable in DEBUG. Production either
+# gets an explicit DJANGO_SECRET_KEY or a key provisioned on disk (below).
 _INSECURE_KEY = "django-insecure-l)=$30y67zj(m+u8o1u3+pqs5f=r*0++-hxhi80(d%xsml($eu"
-# `.env.production.example` ships the key blank, so the common mistake is a
-# present-but-empty variable. `os.environ.get` returns "" for that, not the
-# default — without `or`, Django would accept it here and only fail much later
-# with "SECRET_KEY must not be empty" from inside the error handler.
-SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "") or _INSECURE_KEY
-if not DEBUG and SECRET_KEY == _INSECURE_KEY:
-    # This key is committed to git. Running production on it would let anyone
-    # forge session cookies and log in as the host.
-    raise ImproperlyConfigured(
-        "DJANGO_SECRET_KEY must be set to a non-empty value when DJANGO_DEBUG=0. "
-        "Generate one with: python -c "
-        "'from django.core.management.utils import get_random_secret_key as k; print(k())'"
-    )
+
+# Django's own get_random_secret_key charset, inlined: importing
+# django.core.management from a settings module that is still executing risks
+# a circular import.
+_KEY_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*(-_=+)"
+SECRET_KEY_FILE = BASE_DIR / ".secret_key"
+
+
+def _provisioned_secret_key() -> str:
+    """Return the on-disk secret key, minting it once on first boot.
+
+    Hand-editing `.env` on shared hosting proved error-prone — a blank
+    `DJANGO_SECRET_KEY=` line reads as set-but-empty and took the whole site
+    down. This removes the manual step: the file lives next to the code
+    (outside the web docroot), is gitignored, and is created 0600 so only the
+    hosting user can read it.
+
+    Created with O_EXCL because Passenger boots several workers at once and two
+    of them racing here would otherwise end up with different keys, logging
+    guests out at random.
+
+    Deleting the file mints a new key and invalidates every existing session.
+    """
+    if not SECRET_KEY_FILE.exists():
+        generated = "".join(secrets.choice(_KEY_CHARS) for _ in range(50))
+        try:
+            fd = os.open(SECRET_KEY_FILE, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+        except FileExistsError:
+            pass  # another worker won the race; fall through and read theirs
+        except OSError as exc:
+            raise ImproperlyConfigured(
+                f"No DJANGO_SECRET_KEY is set and {SECRET_KEY_FILE} could not be "
+                f"created ({exc}). Either make that directory writable or set "
+                "DJANGO_SECRET_KEY in .env."
+            ) from exc
+        else:
+            with os.fdopen(fd, "w") as handle:
+                handle.write(generated)
+
+    key = SECRET_KEY_FILE.read_text().strip()
+    if not key:
+        raise ImproperlyConfigured(
+            f"{SECRET_KEY_FILE} is empty. Delete it and restart to mint a new key "
+            "(this logs out every existing session)."
+        )
+    return key
+
+
+# `.strip()` matters: an env var set to whitespace is the same mistake as a
+# blank one, and Django would otherwise accept it and fail much later.
+SECRET_KEY = os.environ.get("DJANGO_SECRET_KEY", "").strip()
+if not SECRET_KEY:
+    SECRET_KEY = _INSECURE_KEY if DEBUG else _provisioned_secret_key()
 
 ALLOWED_HOSTS = _env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
 

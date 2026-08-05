@@ -24,7 +24,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .classifier import classify
-from .models import Guest, Message, Provider, Service, Ticket
+from .models import Guest, Message, Provider, Service, Ticket, normalize_phone
 from .whatsapp import send_text
 
 logger = logging.getLogger(__name__)
@@ -39,21 +39,17 @@ class RelayOutcome:
     note: str = ""
 
 
-def normalize_phone(phone: str) -> str:
-    """Strip whitespace and any '+' prefix variations into canonical '+<digits>'."""
-    phone = phone.strip()
-    if not phone:
-        return ""
-    digits = re.sub(r"\D", "", phone)
-    return f"+{digits}" if digits else ""
-
-
 def _strip_code(body: str) -> str:
     return CODE_RE.sub("", body, count=1).strip()
 
 
 def _format_provider_intro(ticket: Ticket, original_body: str) -> str:
-    guest_label = ticket.guest.name or ticket.guest.phone
+    # Never the guest's phone number. The whole point of relaying through the
+    # business number is that neither side gets the other's contact details —
+    # leaking it here would let the provider book the guest directly next time.
+    # Guests are created without a name on first contact, so the ticket code is
+    # the usual fallback and is enough for the provider to refer to them.
+    guest_label = ticket.guest.name.strip() or ticket.short_code
     fields = ticket.extracted_fields or {}
     field_lines = []
     for key in ("date", "time", "party_size", "language", "notes"):

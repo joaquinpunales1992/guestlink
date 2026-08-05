@@ -149,6 +149,51 @@ class RelayTests(TestCase):
         # No ticket → no PROVIDER_OUT message
         self.assertEqual(len(self._msgs(Message.Direction.PROVIDER_OUT)), 0)
 
+    # ---- the proxy must not leak either side's number ---------------------
+
+    def test_provider_intro_never_contains_the_guest_phone(self) -> None:
+        guest_phone = "+4915112345678"
+        outcome = handle_inbound(from_phone=guest_phone, body="Hi, Saona excursion please")
+        intro = self._msgs(Message.Direction.PROVIDER_OUT)[0].body
+        self.assertNotIn(guest_phone, intro)
+        self.assertNotIn(guest_phone.lstrip("+"), intro)
+        # Falls back to the ticket code so the provider still has a handle.
+        self.assertIn(f"Huésped: {outcome.ticket.short_code}", intro)
+
+    def test_provider_intro_uses_the_guest_name_when_known(self) -> None:
+        Guest.objects.create(phone="+4915112345678", name="Lena")
+        handle_inbound(from_phone="+4915112345678", body="Hi, Saona excursion please")
+        intro = self._msgs(Message.Direction.PROVIDER_OUT)[0].body
+        self.assertIn("Huésped: Lena", intro)
+        self.assertNotIn("4915112345678", intro)
+
+    # ---- provider phone normalization -------------------------------------
+
+    def test_provider_phone_is_normalized_on_save(self) -> None:
+        p = Provider.objects.create(name="Messy", phone="+1 (809) 444-5555")
+        p.refresh_from_db()
+        self.assertEqual(p.phone, "+18094445555")
+
+    def test_provider_typed_with_punctuation_still_routes_replies(self) -> None:
+        """A number entered as '+1 809-333 4444' must still match inbound messages.
+
+        Without normalization on save the lookup in handle_inbound misses, and
+        the provider's reply is misread as a brand-new guest enquiry.
+        """
+        provider = Provider.objects.create(name="Sloppy Entry", phone="+1 809-333 4444")
+        self.saona.default_provider = provider
+        self.saona.save()
+        first = handle_inbound(from_phone="+4915112345678", body="Hi, Saona excursion please")
+        Message.objects.all().delete()
+
+        outcome = handle_inbound(from_phone="+18093334444", body=f"[{first.ticket.short_code}] sí, disponible")
+
+        self.assertEqual(outcome.ticket, first.ticket)
+        self.assertEqual(outcome.note, "forwarded provider→guest")
+        # Routed as a provider, so no second guest/ticket was invented.
+        self.assertEqual(Guest.objects.count(), 1)
+        self.assertEqual(Ticket.objects.count(), 1)
+
 
 @override_settings(WHATSAPP_DRY_RUN=True, ANTHROPIC_API_KEY="sk-test")
 class ClassifierIntegrationTests(TestCase):

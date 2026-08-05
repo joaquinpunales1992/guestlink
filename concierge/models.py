@@ -1,9 +1,23 @@
 """Core models for guestlink concierge relay."""
 
+import re
 import secrets
 
 from django.db import models
 from django.utils import timezone
+
+
+def normalize_phone(phone: str) -> str:
+    """Strip whitespace and any '+' prefix variations into canonical '+<digits>'.
+
+    Lives here rather than in relay.py because Provider.save() needs it and
+    relay.py already imports from this module.
+    """
+    phone = phone.strip()
+    if not phone:
+        return ""
+    digits = re.sub(r"\D", "", phone)
+    return f"+{digits}" if digits else ""
 
 
 def _generate_short_code() -> str:
@@ -64,6 +78,14 @@ class Provider(models.Model):
 
     def __str__(self) -> str:
         return f"{self.name} ({self.phone})"
+
+    def save(self, *args, **kwargs):
+        # Inbound routing matches this column against a normalized '+<digits>'
+        # string (relay.handle_inbound). A number typed into the admin as
+        # "+1 809-222-3333" would never match, and the provider's replies would
+        # be treated as a brand-new guest instead of being forwarded.
+        self.phone = normalize_phone(self.phone)
+        super().save(*args, **kwargs)
 
 
 class Guest(models.Model):

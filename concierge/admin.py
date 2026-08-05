@@ -7,9 +7,16 @@ from .models import Guest, Message, Provider, Service, SiteSettings, Ticket
 
 @admin.register(Service)
 class ServiceAdmin(admin.ModelAdmin):
-    list_display = ("name_en", "slug", "default_provider", "expected_commission_usd", "active", "sort_order")
+    list_display = (
+        "name_en", "slug", "has_referral", "default_provider",
+        "expected_commission_usd", "active", "sort_order",
+    )
     list_filter = ("active",)
     search_fields = ("name_en", "name_es", "name_fr", "slug", "keywords")
+
+    @admin.display(description="referral link", boolean=True, ordering="referral_url")
+    def has_referral(self, obj: Service) -> bool:
+        return bool(obj.referral_url)
 
 
 @admin.register(Provider)

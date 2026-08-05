@@ -45,6 +45,14 @@ class Service(models.Model):
         blank=True,
         help_text="Comma-separated keywords used by the fallback classifier when no LLM is available.",
     )
+    referral_url = models.URLField(
+        blank=True,
+        help_text=(
+            "Affiliate or referral link for this service (e.g. an Airbnb experience). "
+            "Shown instead of the WhatsApp button when the landing page CTA mode uses "
+            "referral links. Services without one fall back to WhatsApp."
+        ),
+    )
     default_provider = models.ForeignKey(
         "Provider", on_delete=models.SET_NULL, null=True, blank=True, related_name="default_for_services"
     )
@@ -156,6 +164,31 @@ class Ticket(models.Model):
 
 class SiteSettings(models.Model):
     """Singleton holding admin-editable copy for the guest-facing landing page."""
+
+    class CtaMode(models.TextChoices):
+        WHATSAPP = "whatsapp", "WhatsApp only"
+        REFERRAL = "referral", "Referral link only (WhatsApp used where no link is set)"
+        BOTH = "both", "Referral link, with WhatsApp underneath"
+
+    cta_mode = models.CharField(
+        max_length=20,
+        choices=CtaMode.choices,
+        default=CtaMode.WHATSAPP,
+        help_text=(
+            "What each service card links to. Referral modes need a Referral URL on "
+            "the service; any service without one keeps its WhatsApp button so the "
+            "card is never a dead end."
+        ),
+    )
+    referral_cta_en = models.CharField(max_length=60, default="Book online")
+    referral_cta_es = models.CharField(max_length=60, default="Reservar online")
+    referral_cta_fr = models.CharField(max_length=60, default="Réserver en ligne")
+    referral_disclosure = models.CharField(
+        max_length=200,
+        blank=True,
+        default="Some links are referral links — booking through them may earn us a commission at no extra cost to you.",
+        help_text="Shown in the footer whenever referral links are on the page. Leave blank to hide.",
+    )
 
     tab_title = models.CharField(max_length=120, help_text="Browser tab title (single string, language-neutral).")
     footer_text = models.CharField(max_length=200, help_text="Line shown in the page footer.")

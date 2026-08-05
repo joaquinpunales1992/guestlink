@@ -82,8 +82,13 @@ def _process_message(msg: dict, *, raw: dict) -> None:
 
 
 def landing(request: HttpRequest) -> HttpResponse:
-    services = Service.objects.filter(active=True)
+    services = list(Service.objects.filter(active=True))
+    site = SiteSettings.load()
     business_number = (settings.WHATSAPP_BUSINESS_NUMBER or "").lstrip("+") or "REPLACE_WITH_E164_DIGITS"
+
+    # A service with no referral_url always keeps its WhatsApp button, so a card
+    # is never a dead end while the referral links are being filled in.
+    show_referrals = site.cta_mode in (SiteSettings.CtaMode.REFERRAL, SiteSettings.CtaMode.BOTH)
     return render(
         request,
         "concierge/landing.html",
@@ -92,7 +97,11 @@ def landing(request: HttpRequest) -> HttpResponse:
             "business_number": business_number,
             "host_name": settings.HOST_NAME,
             "apartment_label": settings.HOST_APARTMENT_LABEL,
-            "site": SiteSettings.load(),
+            "site": site,
+            "show_referrals": show_referrals,
+            "show_whatsapp_fallback": site.cta_mode == SiteSettings.CtaMode.BOTH,
+            # Only disclose when a referral link is actually on the page.
+            "any_referral": show_referrals and any(s.referral_url for s in services),
         },
     )
 

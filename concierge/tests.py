@@ -11,7 +11,7 @@ from unittest.mock import patch
 from django.test import TestCase, override_settings
 
 from concierge.classifier import Classification
-from concierge.models import Guest, Message, Provider, Service, Ticket
+from concierge.models import Guest, Message, Provider, Service, SiteSettings, Ticket
 from concierge.relay import CODE_RE, _strip_code, handle_inbound, normalize_phone
 from concierge.whatsapp import WhatsAppError
 
@@ -259,3 +259,59 @@ class ClassifierIntegrationTests(TestCase):
         self.assertIsNotNone(outcome.ticket)
         self.assertEqual(outcome.ticket.service, self.service)
         self.assertEqual(outcome.ticket.extracted_fields, {"party_size": 4})
+
+
+@override_settings(
+    ALLOWED_HOSTS=["testserver"],
+    WHATSAPP_BUSINESS_NUMBER="573222448409",
+    HOST_APARTMENT_LABEL="Reef",
+)
+class LandingCtaModeTests(TestCase):
+    """The landing page can send guests to a referral link, to WhatsApp, or both."""
+
+    WA = "https://wa.me/573222448409?text="
+    REF = "https://www.airbnb.com/experiences/12345?ref=abc"
+
+    def setUp(self) -> None:
+        # One service with a referral link, one without — the mixed catalogue
+        # is the case that matters, since links get filled in gradually.
+        Service.objects.create(slug="saona", name_en="Saona", name_es="Saona", referral_url=self.REF)
+        Service.objects.create(slug="taxi", name_en="Airport taxi", name_es="Taxi")
+
+    def _render(self, mode: str) -> str:
+        site = SiteSettings.load()
+        site.cta_mode = mode
+        site.save()
+        return self.client.get("/").content.decode()
+
+    def test_whatsapp_mode_ignores_referral_urls(self) -> None:
+        html = self._render(SiteSettings.CtaMode.WHATSAPP)
+        self.assertNotIn(self.REF, html)
+        self.assertIn(self.WA, html)
+        self.assertNotIn("commission", html)
+
+    def test_referral_mode_uses_the_link_and_falls_back_per_service(self) -> None:
+        html = self._render(SiteSettings.CtaMode.REFERRAL)
+        self.assertIn(self.REF, html)
+        # The taxi has no referral link, so its card must still reach WhatsApp
+        # rather than rendering a dead end.
+        self.assertIn(self.WA, html)
+        self.assertIn("Book online", html)
+
+    def test_both_mode_shows_whatsapp_under_the_referral_card(self) -> None:
+        html = self._render(SiteSettings.CtaMode.BOTH)
+        self.assertIn(self.REF, html)
+        self.assertIn("Or ask us on WhatsApp", html)
+
+    def test_referral_links_are_not_followed_and_open_safely(self) -> None:
+        html = self._render(SiteSettings.CtaMode.REFERRAL)
+        self.assertIn('rel="noopener nofollow sponsored"', html)
+        self.assertIn('target="_blank"', html)
+
+    def test_disclosure_appears_only_when_a_referral_link_is_shown(self) -> None:
+        self.assertNotIn("commission", self._render(SiteSettings.CtaMode.WHATSAPP))
+        self.assertIn("commission", self._render(SiteSettings.CtaMode.REFERRAL))
+
+    def test_disclosure_hidden_when_no_service_has_a_link(self) -> None:
+        Service.objects.filter(slug="saona").update(referral_url="")
+        self.assertNotIn("commission", self._render(SiteSettings.CtaMode.REFERRAL))

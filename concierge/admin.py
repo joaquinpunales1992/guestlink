@@ -6,6 +6,18 @@ from .models import Guest, Message, Provider, Service, SiteSettings, Ticket
 from .referral_preview import PreviewError, fetch_preview, points_at_a_listing
 
 
+def _is_fetched_image(service: Service) -> bool:
+    """True if this image came from a referral link rather than the host.
+
+    Fetched files are always saved as "<slug>-preview.jpg"; Django may append a
+    random suffix on collision, so match the stem rather than the whole name.
+    """
+    if not service.image:
+        return False
+    filename = service.image.name.rsplit("/", 1)[-1]
+    return filename.startswith(f"{service.slug}-preview")
+
+
 @admin.register(Service)
 class ServiceAdmin(admin.ModelAdmin):
     list_display = (
@@ -41,7 +53,11 @@ class ServiceAdmin(admin.ModelAdmin):
             )
             return
 
-        if obj.image:
+        # A changed link means the current image belongs to a different
+        # listing, so keeping it is worse than replacing it — but only images
+        # this code fetched are ours to overwrite. Anything uploaded by hand
+        # has a different filename and always wins.
+        if obj.image and not _is_fetched_image(obj):
             return
 
         try:

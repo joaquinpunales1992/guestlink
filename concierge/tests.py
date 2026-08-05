@@ -540,3 +540,50 @@ class ReferralUrlLengthTests(TestCase):
     def test_truncating_it_loses_the_listing_id(self) -> None:
         # Precisely the failure seen in production: 200 chars, no listing_id.
         self.assertFalse(points_at_a_listing(self.FULL[:200]))
+
+
+class StaleCardImageTests(TestCase):
+    """Changing the referral link must not leave the previous listing's photo.
+
+    Observed in production: two cards kept images fetched while the links were
+    truncated, because save_model skipped the fetch whenever any image existed.
+    """
+
+    OLD = "https://es-l.airbnb.com/rp/jpunales1?product=experience&listing_id=111111"
+    NEW = "https://es-l.airbnb.com/rp/jpunales1?product=experience&listing_id=222222"
+
+    def setUp(self) -> None:
+        from django.contrib.admin.sites import site as admin_site
+
+        self.admin = admin_site._registry[Service]
+        self.request = RequestFactory().post("/admin/concierge/service/add/")
+
+    def _preview(self):
+        from PIL import Image
+
+        buf = BytesIO()
+        Image.new("RGB", (1200, 675), (200, 90, 60)).save(buf, format="JPEG")
+        return Mock(content=ContentFile(buf.getvalue()), title="New listing", source_url="https://cdn/n.jpg")
+
+    def _save(self, service, changed_data):
+        form = Mock(changed_data=list(changed_data))
+        with patch.object(type(self.admin), "message_user"):
+            with patch("concierge.admin.fetch_preview", return_value=self._preview()) as fp:
+                self.admin.save_model(self.request, service, form, True)
+        return fp
+
+    def test_changing_the_link_refetches_over_a_previously_fetched_image(self) -> None:
+        s = Service.objects.create(slug="saona", name_en="Saona", name_es="Saona", referral_url=self.OLD)
+        s.image.save("saona-preview.jpg", ContentFile(b"old"), save=True)
+        s.referral_url = self.NEW
+        fp = self._save(s, ["referral_url"])
+        fp.assert_called_once_with(self.NEW)
+
+    def test_a_hand_uploaded_photo_survives_a_link_change(self) -> None:
+        s = Service.objects.create(slug="saona", name_en="Saona", name_es="Saona", referral_url=self.OLD)
+        s.image.save("my-own-photo.jpg", ContentFile(b"mine"), save=True)
+        s.referral_url = self.NEW
+        fp = self._save(s, ["referral_url"])
+        fp.assert_not_called()
+        s.refresh_from_db()
+        self.assertIn("my-own-photo", s.image.name)

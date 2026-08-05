@@ -1,8 +1,9 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.urls import reverse
 from django.utils.html import format_html
 
 from .models import Guest, Message, Provider, Service, SiteSettings, Ticket
+from .referral_preview import PreviewError, fetch_preview
 
 
 @admin.register(Service)
@@ -14,9 +15,49 @@ class ServiceAdmin(admin.ModelAdmin):
     list_filter = ("active",)
     search_fields = ("name_en", "name_es", "name_fr", "slug", "keywords")
 
+    actions = ["fetch_preview_images", "fetch_preview_images_replacing"]
+
     @admin.display(description="referral link", boolean=True, ordering="referral_url")
     def has_referral(self, obj: Service) -> bool:
         return bool(obj.referral_url)
+
+    @admin.action(description="Fetch card image from referral link (skip ones that have an image)")
+    def fetch_preview_images(self, request, queryset):
+        self._fetch_previews(request, queryset, replace=False)
+
+    @admin.action(description="Fetch card image from referral link (REPLACE existing images)")
+    def fetch_preview_images_replacing(self, request, queryset):
+        self._fetch_previews(request, queryset, replace=True)
+
+    def _fetch_previews(self, request, queryset, *, replace: bool) -> None:
+        done = skipped = 0
+        for service in queryset:
+            if not service.referral_url:
+                self.message_user(
+                    request, f"{service.name_en}: no referral URL set.", level=messages.WARNING
+                )
+                continue
+            if service.image and not replace:
+                skipped += 1
+                continue
+            try:
+                preview = fetch_preview(service.referral_url)
+            except PreviewError as exc:
+                self.message_user(request, f"{service.name_en}: {exc}", level=messages.ERROR)
+                continue
+            service.image.save(f"{service.slug}-preview.jpg", preview.content, save=True)
+            done += 1
+            note = f" (source title: {preview.title})" if preview.title else ""
+            self.message_user(request, f"{service.name_en}: image updated{note}.")
+
+        if skipped:
+            self.message_user(
+                request,
+                f"{skipped} service(s) already had an image — use the REPLACE action to overwrite.",
+                level=messages.WARNING,
+            )
+        if done:
+            self.message_user(request, f"{done} image(s) fetched.")
 
 
 @admin.register(Provider)

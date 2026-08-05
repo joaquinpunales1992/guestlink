@@ -6,12 +6,14 @@ messages are still persisted as Message rows, which is what we assert against.
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from io import BytesIO
+from unittest.mock import Mock, patch
 
 from django.test import TestCase, override_settings
 
 from concierge.classifier import Classification
 from concierge.models import Guest, Message, Provider, Service, SiteSettings, Ticket
+from concierge.referral_preview import PreviewError, canonical_page_url, fetch_preview, og_value
 from concierge.relay import CODE_RE, _strip_code, handle_inbound, normalize_phone
 from concierge.whatsapp import WhatsAppError
 
@@ -342,3 +344,70 @@ class SiteSettingsAdminFormTests(TestCase):
             set(),
             "SiteSettings fields missing from SiteSettingsAdmin.fieldsets",
         )
+
+
+class ReferralPreviewTests(TestCase):
+    """Resolving a card image from a referral link. No network in these tests."""
+
+    RP = (
+        "https://es-l.airbnb.com/rp/jpunales1?direct_open=true&p=recommendations"
+        "&product=experience&listing_id=3015830&s=67&unique_share_id=f3e34064"
+    )
+
+    def test_canonical_url_resolves_the_experience_from_a_referral_link(self) -> None:
+        # The /rp/ shim carries no og:image, so we must hop to the real page.
+        self.assertEqual(
+            canonical_page_url(self.RP), "https://www.airbnb.com/experiences/3015830"
+        )
+
+    def test_canonical_url_handles_a_direct_experience_url(self) -> None:
+        self.assertEqual(
+            canonical_page_url("https://www.airbnb.com.co/experiences/3015830?x=1"),
+            "https://www.airbnb.com/experiences/3015830",
+        )
+
+    def test_canonical_url_passes_other_sites_through_untouched(self) -> None:
+        other = "https://www.getyourguide.com/bayahibe-l1234/saona-t5678"
+        self.assertEqual(canonical_page_url(other), other)
+
+    def test_og_value_matches_exactly_and_ignores_width_variants(self) -> None:
+        html = (
+            '<meta property="og:image:width" content="4000"/>'
+            '<meta property="og:image" content="https://cdn/x.jpg"/>'
+            '<meta name="og:title" content="Saona trip"/>'
+        )
+        self.assertEqual(og_value(html, "og:image"), "https://cdn/x.jpg")
+        self.assertEqual(og_value(html, "og:title"), "Saona trip")
+        self.assertIsNone(og_value(html, "og:description"))
+
+    def test_missing_og_image_is_a_clear_error(self) -> None:
+        with patch("concierge.referral_preview.requests.get") as get:
+            get.return_value = Mock(status_code=200, text="<html><head></head></html>")
+            with self.assertRaises(PreviewError) as ctx:
+                fetch_preview(self.RP)
+        self.assertIn("no og:image", str(ctx.exception))
+
+    def test_fetch_downscales_and_stores_a_jpeg(self) -> None:
+        from PIL import Image
+
+        big = BytesIO()
+        Image.new("RGB", (4000, 2250), (10, 120, 130)).save(big, format="JPEG")
+        page = Mock(status_code=200, text='<meta property="og:image" content="https://cdn/x.jpg">')
+        image = Mock(status_code=200)
+        image.iter_content = lambda n: iter([big.getvalue()])
+
+        with patch("concierge.referral_preview.requests.get", side_effect=[page, image]):
+            preview = fetch_preview(self.RP)
+
+        out = Image.open(BytesIO(preview.content.read()))
+        self.assertEqual(out.width, 1200)  # downscaled from 4000
+        self.assertEqual(out.format, "JPEG")
+
+    def test_oversized_image_is_refused(self) -> None:
+        page = Mock(status_code=200, text='<meta property="og:image" content="https://cdn/x.jpg">')
+        image = Mock(status_code=200)
+        image.iter_content = lambda n: iter([b"x" * (9 * 1024 * 1024)])
+        with patch("concierge.referral_preview.requests.get", side_effect=[page, image]):
+            with self.assertRaises(PreviewError) as ctx:
+                fetch_preview(self.RP)
+        self.assertIn("larger than 8 MB", str(ctx.exception))

@@ -506,3 +506,37 @@ class ReferralLinkShapeTests(TestCase):
             model_admin.save_model(request, s, Mock(changed_data=["referral_url"]), False)
         fp.assert_not_called()
         self.assertIn("shared Airbnb search", msg.call_args[0][1])
+
+
+class ReferralUrlLengthTests(TestCase):
+    """Airbnb share links are far longer than URLField's 200-character default.
+
+    The default renders maxlength="200" on the admin input, so a browser
+    truncates the paste silently — and listing_id sits near the end of an
+    Airbnb link, so exactly the identifying part disappears.
+    """
+
+    FULL = (
+        "https://es-l.airbnb.com/rp/jpunales1?location=Bayah%C3%ADbe%2C+Rep%C3%BAblica+Dominicana"
+        "&currentTab=experience_tab&federatedSearchId=661ba9d2-6904-44a8-9a76-b401289116ce"
+        "&searchId=6180823b-a5db-413e-b661-ced41fb17b15"
+        "&sectionId=f5b6f4c3-70c3-402d-8540-0ade51f50643&p=recommendations"
+        "&product=experience&listing_id=591291&s=67"
+        "&unique_share_id=0fcf77ef-fda5-437d-8e96-454fe2618fe0"
+    )
+
+    def test_a_real_airbnb_share_link_exceeds_the_old_default(self) -> None:
+        self.assertGreater(len(self.FULL), 200)
+
+    def test_the_field_accepts_it_whole(self) -> None:
+        self.assertGreaterEqual(Service._meta.get_field("referral_url").max_length, len(self.FULL))
+        s = Service.objects.create(
+            slug="taxi", name_en="Ride", name_es="Traslado", referral_url=self.FULL
+        )
+        s.refresh_from_db()
+        self.assertEqual(s.referral_url, self.FULL)
+        self.assertTrue(points_at_a_listing(s.referral_url))
+
+    def test_truncating_it_loses_the_listing_id(self) -> None:
+        # Precisely the failure seen in production: 200 chars, no listing_id.
+        self.assertFalse(points_at_a_listing(self.FULL[:200]))

@@ -47,10 +47,17 @@ class Service(models.Model):
     )
     referral_url = models.URLField(
         blank=True,
+        # URLField defaults to 200, which renders maxlength="200" on the admin
+        # input — a browser silently truncates a longer paste, with no error.
+        # Airbnb share links run to ~350 characters and carry listing_id near
+        # the end, so the part that identifies the experience is exactly what
+        # got cut off.
+        max_length=800,
         help_text=(
             "Affiliate or referral link for this service (e.g. an Airbnb experience). "
-            "Shown instead of the WhatsApp button when the landing page CTA mode uses "
-            "referral links. Services without one fall back to WhatsApp."
+            "Paste the whole link — Airbnb's are long, and the listing_id near the end "
+            "is what points at the right experience. Services without one fall back "
+            "to WhatsApp."
         ),
     )
     default_provider = models.ForeignKey(

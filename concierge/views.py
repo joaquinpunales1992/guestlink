@@ -91,6 +91,24 @@ def landing(request: HttpRequest) -> HttpResponse:
     )
 
 
+def privacy(request: HttpRequest) -> HttpResponse:
+    """Public privacy policy.
+
+    Meta requires a reachable privacy policy URL before an app can be published,
+    and an unpublished app receives no production webhooks at all.
+    """
+    return render(
+        request,
+        "concierge/privacy.html",
+        {
+            "host_name": settings.HOST_NAME,
+            "business_number": (settings.WHATSAPP_BUSINESS_NUMBER or "").lstrip("+"),
+            "contact_email": settings.PRIVACY_CONTACT_EMAIL,
+            "last_updated": "5 August 2026",
+        },
+    )
+
+
 def healthz(request: HttpRequest) -> HttpResponse:
     return JsonResponse({"ok": True, "webhook": reverse("whatsapp_webhook")})
 

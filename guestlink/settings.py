@@ -179,6 +179,10 @@ if not DEBUG:
 HOST_NAME = os.environ.get("HOST_NAME", "Joaquin")
 HOST_APARTMENT_LABEL = os.environ.get("HOST_APARTMENT_LABEL", "Reef")
 
+# Optional second contact route on /privacy/. Left blank the page points guests
+# at the WhatsApp business number, which is the channel they already use.
+PRIVACY_CONTACT_EMAIL = os.environ.get("PRIVACY_CONTACT_EMAIL", "").strip()
+
 # The path baked into the printed QR cards in print/ (payload:
 # https://bookyourtickets.online/the-reef-401). Serves the same landing page as
 # "/". Changing this orphans every card already hanging in the apartment.

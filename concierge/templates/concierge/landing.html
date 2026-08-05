@@ -113,6 +113,8 @@
       display: block; width: 34px; height: 2px; margin: 0 auto 12px;
       background: var(--terracotta); border-radius: 2px; opacity: 0.8;
     }
+    .footer-links { display: block; margin-top: 8px; }
+    .footer-links a { color: var(--muted); text-decoration: none; border-bottom: 1px solid var(--border); }
     @media (min-width: 460px) {
       .hero h1 { font-size: 42px; }
       .service h2 { font-size: 18px; }
@@ -187,6 +189,9 @@
     <footer>
       <span class="rule" aria-hidden="true"></span>
       {{ site.footer_text }}
+      <span class="footer-links">
+        <a href="{% url 'privacy' %}">Privacy</a>
+      </span>
     </footer>
   </main>
 

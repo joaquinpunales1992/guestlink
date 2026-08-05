@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy Policy · {{ host_name }}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --petrol: #0d4650;
+      --sea: #17727f;
+      --cream: #f6efe2;
+      --ink: #143840;
+      --muted: #5f7b81;
+      --terracotta: #d9694a;
+      --card: #ffffff;
+      --border: rgba(13, 70, 80, 0.10);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; color: var(--ink);
+      font-family: "Manrope", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--cream);
+      -webkit-font-smoothing: antialiased;
+    }
+    .hero {
+      background: linear-gradient(165deg, var(--sea) 0%, var(--petrol) 100%);
+      color: #fff; padding: 34px 22px 30px; text-align: center;
+    }
+    .hero h1 {
+      margin: 0; font-family: "Fraunces", Georgia, serif; font-weight: 400; font-style: italic;
+      font-size: clamp(26px, 7vw, 34px); letter-spacing: -0.02em;
+    }
+    .hero p { margin: 10px 0 0; font-size: 13px; color: rgba(255,255,255,0.78); }
+    main { max-width: 640px; margin: 0 auto; padding: 26px 22px 50px; }
+    .card {
+      background: var(--card); border: 1px solid var(--border); border-radius: 14px;
+      padding: 22px 22px 6px; margin-bottom: 16px;
+    }
+    h2 {
+      font-family: "Fraunces", Georgia, serif; font-weight: 500; font-size: 19px;
+      margin: 0 0 10px; letter-spacing: -0.01em;
+    }
+    h2::after {
+      content: ""; display: block; width: 30px; height: 2px; margin-top: 9px;
+      background: var(--terracotta); border-radius: 2px; opacity: 0.85;
+    }
+    p, li { font-size: 15px; line-height: 1.62; }
+    ul { padding-left: 20px; }
+    li { margin-bottom: 7px; }
+    a { color: var(--sea); }
+    .lede { font-size: 15.5px; line-height: 1.65; }
+    footer {
+      text-align: center; color: var(--muted); font-size: 12px;
+      font-weight: 500; margin-top: 26px;
+    }
+    footer a { color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="hero">
+    <h1>Privacy Policy</h1>
+    <p>Last updated {{ last_updated }}</p>
+  </div>
+
+  <main>
+    <div class="card">
+      <p class="lede">
+        This page explains what happens to your information when you contact
+        {{ host_name }} over WhatsApp about services during your stay. It is a small
+        operation run by one host, and the short version is: your details are used to
+        arrange what you asked for, and nothing else.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>What is collected</h2>
+      <ul>
+        <li>Your WhatsApp phone number</li>
+        <li>Your WhatsApp profile name, if your privacy settings share it</li>
+        <li>The content of the messages you send, and the replies sent to you</li>
+        <li>The date and time of each message</li>
+      </ul>
+      <p>
+        Nothing is collected from you automatically by visiting this website. There are
+        no analytics, no advertising trackers, and no cookies used for tracking.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>How it is used</h2>
+      <p>
+        Your messages are used to understand what you are asking for and to arrange it
+        with a local service provider — an excursion operator, a driver, a restaurant,
+        and so on. A record of each request is kept so the booking can be followed up
+        and any problem resolved.
+      </p>
+      <p>
+        Messages may be processed by an automated system to categorise the request
+        (for example, recognising that a message is about an island excursion rather
+        than a taxi). No decision affecting you is made solely by that system — a human
+        host is involved in every booking.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>Who it is shared with</h2>
+      <ul>
+        <li>
+          <strong>The service provider handling your request.</strong> They receive what
+          you asked for and the details needed to fulfil it. Your phone number is
+          deliberately <em>not</em> passed on — messages are relayed through this
+          service, so the provider replies to {{ host_name }}, not to you directly.
+        </li>
+        <li>
+          <strong>WhatsApp (Meta).</strong> Messages travel over WhatsApp, so Meta
+          processes them as the messaging provider, under
+          <a href="https://www.whatsapp.com/legal/privacy-policy" rel="noopener">their own privacy policy</a>.
+        </li>
+      </ul>
+      <p>
+        Your information is never sold, rented, or used for advertising, and it is not
+        shared with anyone else except where the law requires it.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>How long it is kept</h2>
+      <p>
+        Booking records and their message history are kept while they may still be
+        needed — to handle a follow-up question, a refund, or a dispute — and are
+        deleted when they no longer serve that purpose. You can ask for your records to
+        be deleted sooner at any time.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>Your choices</h2>
+      <p>
+        You can ask to see what is held about you, ask for it to be corrected, or ask
+        for it to be deleted. You can also simply stop messaging — nothing is sent to
+        you unless you start a conversation or have an active booking.
+      </p>
+    </div>
+
+    <div class="card">
+      <h2>Contact</h2>
+      <p>
+        For anything about this policy or your information, message
+        {% if business_number %}
+          <a href="https://wa.me/{{ business_number }}" rel="noopener">+{{ business_number }}</a> on WhatsApp{% if contact_email %},
+          or email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>{% endif %}.
+        {% elif contact_email %}
+          <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.
+        {% else %}
+          {{ host_name }} directly.
+        {% endif %}
+      </p>
+    </div>
+
+    <footer>
+      <a href="/">← Back to {{ host_name }}</a>
+    </footer>
+  </main>
+</body>
+</html>

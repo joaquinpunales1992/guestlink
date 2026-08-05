@@ -70,7 +70,13 @@ def _process_message(msg: dict, *, raw: dict) -> None:
             wa_message_id=wa_id,
             raw=raw,
         )
-        logger.info("Relay outcome: %s", outcome)
+        if outcome.delivery_failed:
+            # Persisted but undelivered. Meta still gets a 200 (a retry would
+            # duplicate the ticket, not fix the send), so this log line and the
+            # admin's delivery filter are the only signals.
+            logger.error("Relay handled but DELIVERY FAILED: %s", outcome)
+        else:
+            logger.info("Relay outcome: %s", outcome)
     except Exception:
         logger.exception("Relay failed for wa_id=%s", wa_id)
 

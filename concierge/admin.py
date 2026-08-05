@@ -83,10 +83,27 @@ class SiteSettingsAdmin(admin.ModelAdmin):
 
 @admin.register(Message)
 class MessageAdmin(admin.ModelAdmin):
-    list_display = ("created_at", "direction", "from_phone", "to_phone", "ticket", "body_short")
-    list_filter = ("direction",)
-    search_fields = ("body", "from_phone", "to_phone", "wa_message_id")
-    readonly_fields = ("created_at", "raw_payload", "wa_message_id")
+    list_display = (
+        "created_at", "direction", "delivered", "from_phone", "to_phone", "ticket", "body_short",
+    )
+    # delivery_status first: "did anything fail to reach someone?" is the
+    # question worth answering at a glance.
+    list_filter = ("delivery_status", "direction")
+    search_fields = ("body", "from_phone", "to_phone", "wa_message_id", "delivery_error")
+    readonly_fields = ("created_at", "raw_payload", "wa_message_id", "delivery_error")
+
+    @admin.display(description="delivery", ordering="delivery_status")
+    def delivered(self, obj: Message) -> str:
+        if obj.delivery_status == Message.Delivery.FAILED:
+            return format_html(
+                '<span style="color:#b3261e;font-weight:600" title="{}">✕ failed</span>',
+                obj.delivery_error or "unknown error",
+            )
+        if obj.delivery_status == Message.Delivery.DRY_RUN:
+            return format_html('<span style="color:#8a6d00">dry run</span>')
+        if obj.delivery_status == Message.Delivery.SENT:
+            return format_html('<span style="color:#1e7b34">✓ sent</span>')
+        return ""  # inbound
 
     @admin.display(description="body")
     def body_short(self, obj: Message) -> str:

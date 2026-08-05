@@ -213,6 +213,13 @@ class Message(models.Model):
         PROVIDER_OUT = "provider_out", "To provider"
         SYSTEM_OUT = "system_out", "System → user"
 
+    class Delivery(models.TextChoices):
+        """Outbound only — inbound rows leave this blank."""
+
+        SENT = "sent", "Sent"
+        DRY_RUN = "dry_run", "Dry run"
+        FAILED = "failed", "Failed"
+
     ticket = models.ForeignKey(Ticket, on_delete=models.CASCADE, null=True, blank=True, related_name="messages")
     direction = models.CharField(max_length=20, choices=Direction.choices)
     from_phone = models.CharField(max_length=20, blank=True)
@@ -221,10 +228,24 @@ class Message(models.Model):
     wa_message_id = models.CharField(max_length=120, blank=True, db_index=True)
     raw_payload = models.JSONField(null=True, blank=True)
     created_at = models.DateTimeField(default=timezone.now)
+    delivery_status = models.CharField(
+        max_length=20,
+        blank=True,
+        choices=Delivery.choices,
+        help_text="Outbound only. 'failed' means the guest or provider never received this.",
+    )
+    delivery_error = models.TextField(
+        blank=True,
+        help_text="Why the send failed — usually an expired token or a closed 24-hour window.",
+    )
 
     class Meta:
         ordering = ("-created_at",)
-        indexes = [models.Index(fields=("ticket", "direction"))]
+        indexes = [
+            models.Index(fields=("ticket", "direction")),
+            # The admin's "undelivered" view scans this; keep it cheap.
+            models.Index(fields=("delivery_status", "created_at")),
+        ]
 
     def __str__(self) -> str:
         return f"{self.direction} @ {self.created_at:%Y-%m-%d %H:%M}: {self.body[:40]}"

@@ -21,6 +21,7 @@ from dataclasses import dataclass
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Max
 from django.utils import timezone
 
 from .classifier import classify
@@ -37,6 +38,10 @@ class RelayOutcome:
     handled: bool
     ticket: Ticket | None = None
     note: str = ""
+    # True when something was persisted but never reached its recipient. The
+    # webhook still returns 200 (Meta must not retry), so this is how the
+    # caller learns delivery broke.
+    delivery_failed: bool = False
 
 
 def _strip_code(body: str) -> str:
@@ -101,10 +106,20 @@ def handle_inbound(
     if not from_phone or not body:
         return RelayOutcome(handled=False, note="empty from/body")
 
+    # Watermark rather than threading a flag through every handler: catches
+    # each send path, including ones added later.
+    last_id = Message.objects.aggregate(m=Max("id"))["m"] or 0
+
     provider = Provider.objects.filter(phone=from_phone, active=True).first()
     if provider is not None:
-        return _handle_provider_message(provider, body, wa_message_id, raw)
-    return _handle_guest_message(from_phone, body, wa_message_id, raw)
+        outcome = _handle_provider_message(provider, body, wa_message_id, raw)
+    else:
+        outcome = _handle_guest_message(from_phone, body, wa_message_id, raw)
+
+    outcome.delivery_failed = Message.objects.filter(
+        id__gt=last_id, delivery_status=Message.Delivery.FAILED
+    ).exists()
+    return outcome
 
 
 def _persist_inbound(
@@ -125,14 +140,41 @@ def _persist_inbound(
 def _send_and_log(
     *, ticket: Ticket | None, direction: str, to_phone: str, body: str,
 ) -> Message:
-    result = send_text(to_phone, body)
+    """Send, and record the attempt whether or not it succeeded.
+
+    A delivery failure must never propagate. handle_inbound runs in a
+    transaction and the webhook view swallows exceptions, so an exception here
+    used to roll back the guest's inbound message and their ticket, return 200
+    to Meta, and leave nothing behind but a log line — the request simply
+    vanished. An expired access token was enough to do it.
+
+    Recording the failed row instead keeps the ticket, keeps the conversation,
+    and makes the breakage visible in the admin so the host can follow up by
+    hand.
+    """
+    status = Message.Delivery.SENT
+    error = ""
+    wa_message_id = ""
+    try:
+        result = send_text(to_phone, body)
+    except Exception as exc:  # noqa: BLE001 - losing the message is worse
+        logger.exception("Delivery to %s failed (ticket=%s)", to_phone, ticket)
+        status = Message.Delivery.FAILED
+        error = f"{type(exc).__name__}: {exc}"[:2000]
+    else:
+        wa_message_id = result.wa_message_id
+        if result.dry_run:
+            status = Message.Delivery.DRY_RUN
+
     return Message.objects.create(
         ticket=ticket,
         direction=direction,
         from_phone="",  # business number; we don't track it here
         to_phone=to_phone,
         body=body,
-        wa_message_id=result.wa_message_id,
+        wa_message_id=wa_message_id,
+        delivery_status=status,
+        delivery_error=error,
     )
 
 

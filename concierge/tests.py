@@ -13,6 +13,7 @@ from django.test import TestCase, override_settings
 from concierge.classifier import Classification
 from concierge.models import Guest, Message, Provider, Service, Ticket
 from concierge.relay import CODE_RE, _strip_code, handle_inbound, normalize_phone
+from concierge.whatsapp import WhatsAppError
 
 
 @override_settings(WHATSAPP_DRY_RUN=True, ANTHROPIC_API_KEY="")
@@ -166,6 +167,45 @@ class RelayTests(TestCase):
         intro = self._msgs(Message.Direction.PROVIDER_OUT)[0].body
         self.assertIn("Huésped: Lena", intro)
         self.assertNotIn("4915112345678", intro)
+
+    # ---- a failed send must not destroy the conversation -------------------
+
+    def test_failed_send_still_keeps_ticket_and_messages(self) -> None:
+        """An expired token used to erase the guest's request entirely.
+
+        handle_inbound is atomic and the webhook view swallows exceptions, so a
+        raising send_text rolled back the inbound row and the ticket, returned
+        200 to Meta, and left no trace of what the guest asked for.
+        """
+        with patch("concierge.relay.send_text", side_effect=WhatsAppError("(#190) token expired")):
+            outcome = handle_inbound(from_phone="+4915112345678", body="Hi, Saona excursion please")
+
+        self.assertTrue(outcome.handled)
+        self.assertTrue(outcome.delivery_failed)
+        self.assertIsNotNone(outcome.ticket)
+        # The evidence survives.
+        self.assertEqual(Ticket.objects.count(), 1)
+        self.assertEqual(Guest.objects.count(), 1)
+        self.assertEqual(len(self._msgs(Message.Direction.GUEST_IN)), 1)
+
+        failed = Message.objects.filter(delivery_status=Message.Delivery.FAILED)
+        self.assertEqual(failed.count(), 2)  # provider intro + guest ack
+        self.assertIn("token expired", failed.first().delivery_error)
+
+    def test_successful_send_is_marked_dry_run_under_dry_run(self) -> None:
+        handle_inbound(from_phone="+4915112345678", body="Hi, Saona excursion please")
+        statuses = set(
+            Message.objects.exclude(delivery_status="").values_list("delivery_status", flat=True)
+        )
+        self.assertEqual(statuses, {Message.Delivery.DRY_RUN})
+        # Inbound rows carry no delivery status at all.
+        self.assertEqual(
+            Message.objects.get(direction=Message.Direction.GUEST_IN).delivery_status, ""
+        )
+
+    def test_delivery_failed_is_false_on_a_clean_run(self) -> None:
+        outcome = handle_inbound(from_phone="+4915112345678", body="Hi, Saona excursion please")
+        self.assertFalse(outcome.delivery_failed)
 
     # ---- provider phone normalization -------------------------------------
 

@@ -1,9 +1,11 @@
+from django.conf import settings
 from django.contrib import admin, messages
 from django.urls import reverse
 from django.utils.html import format_html
 
 from .models import Guest, Message, Provider, Service, SiteSettings, Ticket
 from .referral_preview import PreviewError, fetch_preview, points_at_a_listing
+from .translate import TranslationError, fill_missing_names
 
 
 def _is_fetched_image(service: Service) -> bool:
@@ -27,7 +29,7 @@ class ServiceAdmin(admin.ModelAdmin):
     list_filter = ("active",)
     search_fields = ("name_en", "name_es", "name_fr", "slug", "keywords")
 
-    actions = ["fetch_preview_images", "fetch_preview_images_replacing"]
+    actions = ["fetch_preview_images", "fetch_preview_images_replacing", "translate_names"]
 
     def save_model(self, request, obj, form, change):
         """Grab the card image as soon as a referral link is set.
@@ -38,6 +40,7 @@ class ServiceAdmin(admin.ModelAdmin):
         card falls back to the plain gradient banner.
         """
         super().save_model(request, obj, form, change)
+        self._fill_translations(request, obj)
 
         link_is_new = not change or "referral_url" in getattr(form, "changed_data", [])
         if not (obj.referral_url and link_is_new):
@@ -74,9 +77,48 @@ class ServiceAdmin(admin.ModelAdmin):
         note = f" from “{preview.title}”" if preview.title else ""
         self.message_user(request, f"Card image fetched{note}.")
 
+    def _fill_translations(self, request, service) -> None:
+        """Translate the English name into any language left blank.
+
+        Silent when no API key is configured — the landing page falls back to
+        the English name, so a missing translation is a cosmetic gap, not an
+        error worth interrupting a save for.
+        """
+        if not settings.ANTHROPIC_API_KEY:
+            return
+        try:
+            filled = fill_missing_names(service)
+        except TranslationError as exc:
+            self.message_user(
+                request,
+                f"Saved, but the name could not be translated: {exc}. "
+                "The page will show the English name until you fill it in.",
+                level=messages.WARNING,
+            )
+            return
+        if filled:
+            Service.objects.filter(pk=service.pk).update(
+                **{f"name_{code}": getattr(service, f"name_{code}") for code in filled}
+            )
+            names = ", ".join(f"{c.upper()}: “{getattr(service, f'name_{c}')}”" for c in filled)
+            self.message_user(request, f"Translated the name — {names}. Edit if you'd word it differently.")
+
     @admin.display(description="referral link", boolean=True, ordering="referral_url")
     def has_referral(self, obj: Service) -> bool:
         return bool(obj.referral_url)
+
+    @admin.action(description="Translate missing Spanish / French names from English")
+    def translate_names(self, request, queryset):
+        done = 0
+        for service in queryset:
+            before = (service.name_es, service.name_fr)
+            self._fill_translations(request, service)
+            if (service.name_es, service.name_fr) != before:
+                done += 1
+        if not done:
+            self.message_user(
+                request, "Nothing to translate — every selected service already has both names."
+            )
 
     @admin.action(description="Fetch card image from referral link (skip ones that have an image)")
     def fetch_preview_images(self, request, queryset):

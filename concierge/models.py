@@ -30,7 +30,9 @@ class Service(models.Model):
 
     slug = models.SlugField(unique=True)
     name_en = models.CharField(max_length=120)
-    name_es = models.CharField(max_length=120)
+    # Optional: filled by translating name_en on save when an Anthropic key is
+    # configured, and falling back to English on the page when it isn't.
+    name_es = models.CharField(max_length=120, blank=True)
     name_fr = models.CharField(max_length=120, blank=True)
     description_en = models.TextField(blank=True)
     description_es = models.TextField(blank=True)
@@ -76,6 +78,17 @@ class Service(models.Model):
     @property
     def keyword_list(self) -> list[str]:
         return [k.strip().lower() for k in self.keywords.split(",") if k.strip()]
+
+    # The landing page reads these rather than the raw columns so a missing
+    # translation shows the English name instead of an empty card title — and,
+    # in the pre-filled WhatsApp message, instead of "info sobre ." .
+    @property
+    def display_name_es(self) -> str:
+        return self.name_es or self.name_en
+
+    @property
+    def display_name_fr(self) -> str:
+        return self.name_fr or self.name_en
 
 
 class Provider(models.Model):

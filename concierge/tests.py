@@ -22,6 +22,7 @@ from concierge.referral_preview import (
     points_at_a_listing,
 )
 from concierge.relay import CODE_RE, _strip_code, handle_inbound, normalize_phone
+from concierge.translate import TranslationError, fill_missing_names, translate
 from concierge.whatsapp import WhatsAppError
 
 
@@ -587,3 +588,94 @@ class StaleCardImageTests(TestCase):
         fp.assert_not_called()
         s.refresh_from_db()
         self.assertIn("my-own-photo", s.image.name)
+
+
+@override_settings(ANTHROPIC_API_KEY="sk-test")
+class TranslationTests(TestCase):
+    """One English name in, Spanish and French filled in automatically."""
+
+    def _client_returning(self, payload):
+        # `name` is a reserved Mock constructor kwarg — it names the mock
+        # rather than setting the attribute, so assign it afterwards.
+        block = Mock(type="tool_use", input=payload)
+        block.name = "record_translations"
+        client = Mock()
+        client.messages.create.return_value = Mock(content=[block])
+        return client
+
+    def _patch(self, client):
+        module = Mock()
+        module.Anthropic.return_value = client
+        return patch.dict("sys.modules", {"anthropic": module})
+
+    def test_translate_returns_both_languages(self) -> None:
+        client = self._client_returning({"es": "Excursión a Isla Saona", "fr": "Excursion à Saona"})
+        with self._patch(client):
+            out = translate("Saona Island excursion")
+        self.assertEqual(out, {"es": "Excursión a Isla Saona", "fr": "Excursion à Saona"})
+        kwargs = client.messages.create.call_args.kwargs
+        self.assertEqual(kwargs["model"], "claude-opus-5")
+        # Forced tool use, so the model cannot answer in prose.
+        self.assertEqual(kwargs["tool_choice"]["name"], "record_translations")
+
+    def test_only_blank_languages_are_requested_and_filled(self) -> None:
+        s = Service.objects.create(
+            slug="saona", name_en="Saona Island excursion", name_es="Mi propia traducción"
+        )
+        client = self._client_returning({"fr": "Excursion à Saona"})
+        with self._patch(client):
+            filled = fill_missing_names(s)
+        self.assertEqual(filled, ["fr"])
+        # The host's Spanish wording is untouched.
+        self.assertEqual(s.name_es, "Mi propia traducción")
+        self.assertEqual(s.name_fr, "Excursion à Saona")
+        self.assertEqual(set(client.messages.create.call_args.kwargs["tools"][0]["input_schema"]["properties"]), {"fr"})
+
+    def test_nothing_to_do_makes_no_api_call(self) -> None:
+        s = Service.objects.create(slug="s", name_en="Taxi", name_es="Taxi", name_fr="Taxi")
+        client = self._client_returning({})
+        with self._patch(client):
+            self.assertEqual(fill_missing_names(s), [])
+        client.messages.create.assert_not_called()
+
+    def test_empty_translation_is_an_error_not_a_blank_name(self) -> None:
+        client = self._client_returning({"es": "  ", "fr": "Excursion"})
+        with self._patch(client):
+            with self.assertRaises(TranslationError) as ctx:
+                translate("Saona Island excursion")
+        self.assertIn("es", str(ctx.exception))
+
+    @override_settings(ANTHROPIC_API_KEY="")
+    def test_without_an_api_key_it_raises_rather_than_guessing(self) -> None:
+        with self.assertRaises(TranslationError):
+            translate("Saona Island excursion")
+
+    def test_api_failure_is_wrapped(self) -> None:
+        client = Mock()
+        client.messages.create.side_effect = RuntimeError("connection reset")
+        with self._patch(client):
+            with self.assertRaises(TranslationError) as ctx:
+                translate("Saona")
+        self.assertIn("connection reset", str(ctx.exception))
+
+
+class MissingTranslationFallbackTests(TestCase):
+    """A blank translation must never render as an empty title or a broken message."""
+
+    def test_display_names_fall_back_to_english(self) -> None:
+        s = Service(slug="saona", name_en="Saona Island excursion")
+        self.assertEqual(s.display_name_es, "Saona Island excursion")
+        self.assertEqual(s.display_name_fr, "Saona Island excursion")
+
+    @override_settings(
+        ALLOWED_HOSTS=["testserver"], WHATSAPP_BUSINESS_NUMBER="573222448409", ANTHROPIC_API_KEY=""
+    )
+    def test_landing_page_uses_english_when_a_translation_is_missing(self) -> None:
+        Service.objects.create(slug="saona", name_en="Saona Island excursion")
+        html = self.client.get("/").content.decode()
+        # Every language span shows the English name — none render empty.
+        self.assertGreaterEqual(html.count("Saona Island excursion"), 3)
+        self.assertNotIn('<span class="es"></span>', html)
+        self.assertNotIn('<span class="fr"></span>', html)
+        # And the pre-filled Spanish message is not "info sobre ."
+        self.assertNotIn("sobre%20.", html)

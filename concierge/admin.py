@@ -75,7 +75,26 @@ class TicketAdmin(admin.ModelAdmin):
 
 @admin.register(SiteSettings)
 class SiteSettingsAdmin(admin.ModelAdmin):
+    # NB: fieldsets are a whitelist — a new model field is invisible in the
+    # admin until it is listed here.
     fieldsets = (
+        (
+            "Service buttons",
+            {
+                "fields": (
+                    "cta_mode",
+                    "referral_cta_en",
+                    "referral_cta_es",
+                    "referral_cta_fr",
+                    "referral_disclosure",
+                ),
+                "description": (
+                    "Set a Referral URL on each service, then choose a mode here. "
+                    "Services without a referral link keep their WhatsApp button "
+                    "whichever mode is selected."
+                ),
+            },
+        ),
         ("Tab & footer", {"fields": ("tab_title", "footer_text")}),
         ("Headline (big h1)", {"fields": ("headline_en", "headline_es", "headline_fr")}),
         ("Tagline (subtitle under h1)", {"fields": ("tagline_en", "tagline_es", "tagline_fr")}),

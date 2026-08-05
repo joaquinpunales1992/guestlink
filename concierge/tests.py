@@ -315,3 +315,30 @@ class LandingCtaModeTests(TestCase):
     def test_disclosure_hidden_when_no_service_has_a_link(self) -> None:
         Service.objects.filter(slug="saona").update(referral_url="")
         self.assertNotIn("commission", self._render(SiteSettings.CtaMode.REFERRAL))
+
+
+class SiteSettingsAdminFormTests(TestCase):
+    """Guard against the fieldsets whitelist hiding a field from the host.
+
+    SiteSettingsAdmin lists fields explicitly, so a new model field is invisible
+    in the admin until it is added there — silently, with no error anywhere.
+    """
+
+    def test_every_editable_field_is_reachable_in_the_admin(self) -> None:
+        from django.contrib.admin.sites import site as admin_site
+
+        from concierge.models import SiteSettings as S
+
+        model_admin = admin_site._registry[S]
+        in_fieldsets = {
+            f for _, opts in model_admin.fieldsets for f in opts["fields"]
+        }
+        editable = {
+            f.name for f in S._meta.get_fields()
+            if getattr(f, "editable", False) and not f.auto_created and f.name != "id"
+        }
+        self.assertEqual(
+            editable - in_fieldsets,
+            set(),
+            "SiteSettings fields missing from SiteSettingsAdmin.fieldsets",
+        )

@@ -9,7 +9,8 @@ from __future__ import annotations
 from io import BytesIO
 from unittest.mock import Mock, patch
 
-from django.test import TestCase, override_settings
+from django.core.files.base import ContentFile
+from django.test import RequestFactory, TestCase, override_settings
 
 from concierge.classifier import Classification
 from concierge.models import Guest, Message, Provider, Service, SiteSettings, Ticket
@@ -411,3 +412,55 @@ class ReferralPreviewTests(TestCase):
             with self.assertRaises(PreviewError) as ctx:
                 fetch_preview(self.RP)
         self.assertIn("larger than 8 MB", str(ctx.exception))
+
+
+class ServiceAdminAutoPreviewTests(TestCase):
+    """Saving a service with a referral link should pull its card image."""
+
+    RP = "https://es-l.airbnb.com/rp/jpunales1?product=experience&listing_id=3015830"
+
+    def setUp(self) -> None:
+        from django.contrib.admin.sites import site as admin_site
+
+        self.admin = admin_site._registry[Service]
+        self.request = RequestFactory().post("/admin/concierge/service/add/")
+
+    def _save(self, service, *, change=False, changed_data=()):
+        form = Mock(changed_data=list(changed_data))
+        with patch.object(type(self.admin), "message_user"):
+            self.admin.save_model(self.request, service, form, change)
+
+    def _fake_preview(self):
+        from PIL import Image
+
+        buf = BytesIO()
+        Image.new("RGB", (1200, 675), (10, 120, 130)).save(buf, format="JPEG")
+        return Mock(content=ContentFile(buf.getvalue()), title="Saona trip", source_url="https://cdn/x.jpg")
+
+    def test_new_service_with_referral_link_gets_an_image(self) -> None:
+        s = Service(slug="saona", name_en="Saona", name_es="Saona", referral_url=self.RP)
+        with patch("concierge.admin.fetch_preview", return_value=self._fake_preview()) as fp:
+            self._save(s)
+        fp.assert_called_once_with(self.RP)
+        s.refresh_from_db()
+        self.assertTrue(s.image)
+
+    def test_a_hand_uploaded_image_is_never_overwritten(self) -> None:
+        s = Service(slug="saona", name_en="Saona", name_es="Saona", referral_url=self.RP)
+        s.image.save("mine.jpg", ContentFile(b"not-a-real-jpeg"), save=False)
+        with patch("concierge.admin.fetch_preview") as fp:
+            self._save(s)
+        fp.assert_not_called()
+
+    def test_unrelated_edit_does_not_refetch(self) -> None:
+        s = Service.objects.create(slug="saona", name_en="Saona", name_es="Saona", referral_url=self.RP)
+        with patch("concierge.admin.fetch_preview") as fp:
+            self._save(s, change=True, changed_data=["name_en"])
+        fp.assert_not_called()
+
+    def test_failed_fetch_still_saves_the_service(self) -> None:
+        s = Service(slug="saona", name_en="Saona", name_es="Saona", referral_url=self.RP)
+        with patch("concierge.admin.fetch_preview", side_effect=PreviewError("no og:image")):
+            self._save(s)
+        self.assertTrue(Service.objects.filter(slug="saona").exists())
+        self.assertFalse(Service.objects.get(slug="saona").image)

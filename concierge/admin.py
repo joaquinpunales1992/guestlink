@@ -17,6 +17,34 @@ class ServiceAdmin(admin.ModelAdmin):
 
     actions = ["fetch_preview_images", "fetch_preview_images_replacing"]
 
+    def save_model(self, request, obj, form, change):
+        """Grab the card image as soon as a referral link is set.
+
+        Only on admin saves, and only when the service has no image of its own:
+        a photo uploaded by hand always wins. A failed fetch is a warning on the
+        save, never an error — the service is already saved by then, and the
+        card falls back to the plain gradient banner.
+        """
+        super().save_model(request, obj, form, change)
+
+        link_is_new = not change or "referral_url" in getattr(form, "changed_data", [])
+        if not (obj.referral_url and link_is_new and not obj.image):
+            return
+
+        try:
+            preview = fetch_preview(obj.referral_url)
+        except PreviewError as exc:
+            self.message_user(
+                request,
+                f"Saved, but no card image could be fetched from the referral link: {exc}",
+                level=messages.WARNING,
+            )
+            return
+
+        obj.image.save(f"{obj.slug}-preview.jpg", preview.content, save=True)
+        note = f" from “{preview.title}”" if preview.title else ""
+        self.message_user(request, f"Card image fetched{note}.")
+
     @admin.display(description="referral link", boolean=True, ordering="referral_url")
     def has_referral(self, obj: Service) -> bool:
         return bool(obj.referral_url)

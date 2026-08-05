@@ -3,7 +3,7 @@ from django.urls import reverse
 from django.utils.html import format_html
 
 from .models import Guest, Message, Provider, Service, SiteSettings, Ticket
-from .referral_preview import PreviewError, fetch_preview
+from .referral_preview import PreviewError, fetch_preview, points_at_a_listing
 
 
 @admin.register(Service)
@@ -28,7 +28,20 @@ class ServiceAdmin(admin.ModelAdmin):
         super().save_model(request, obj, form, change)
 
         link_is_new = not change or "referral_url" in getattr(form, "changed_data", [])
-        if not (obj.referral_url and link_is_new and not obj.image):
+        if not (obj.referral_url and link_is_new):
+            return
+
+        if not points_at_a_listing(obj.referral_url):
+            self.message_user(
+                request,
+                "This looks like a shared Airbnb search, not a single experience — "
+                "guests will land on a list of results. Open the experience itself "
+                "and use its Share → Copy link.",
+                level=messages.WARNING,
+            )
+            return
+
+        if obj.image:
             return
 
         try:

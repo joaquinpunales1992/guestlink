@@ -78,6 +78,23 @@ def canonical_page_url(referral_url: str) -> str:
     return referral_url
 
 
+def points_at_a_listing(referral_url: str) -> bool:
+    """False for an Airbnb link that resolves to a search page, not one listing.
+
+    Airbnb's Share button appears on search results too, and the link it copies
+    there carries `federatedSearchId` / `searchId` instead of `listing_id`. It
+    is a valid referral link — it just dumps the guest on a list of everything
+    in Bayahibe rather than the trip whose card they tapped, which is easy to
+    do and impossible to spot by eye.
+    """
+    parsed = urlparse(referral_url)
+    if "airbnb." not in parsed.netloc.lower():
+        return True  # not ours to judge
+    if _EXPERIENCE_PATH_RE.search(parsed.path):
+        return True
+    return "listing_id" in parse_qs(parsed.query)
+
+
 def fetch_preview(referral_url: str) -> Preview:
     """Download and downscale the destination's preview image."""
     page_url = canonical_page_url(referral_url)

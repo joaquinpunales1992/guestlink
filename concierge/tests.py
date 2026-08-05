@@ -14,7 +14,13 @@ from django.test import RequestFactory, TestCase, override_settings
 
 from concierge.classifier import Classification
 from concierge.models import Guest, Message, Provider, Service, SiteSettings, Ticket
-from concierge.referral_preview import PreviewError, canonical_page_url, fetch_preview, og_value
+from concierge.referral_preview import (
+    PreviewError,
+    canonical_page_url,
+    fetch_preview,
+    og_value,
+    points_at_a_listing,
+)
 from concierge.relay import CODE_RE, _strip_code, handle_inbound, normalize_phone
 from concierge.whatsapp import WhatsAppError
 
@@ -464,3 +470,39 @@ class ServiceAdminAutoPreviewTests(TestCase):
             self._save(s)
         self.assertTrue(Service.objects.filter(slug="saona").exists())
         self.assertFalse(Service.objects.get(slug="saona").image)
+
+
+class ReferralLinkShapeTests(TestCase):
+    """A shared Airbnb *search* is a valid referral link that lands guests wrong."""
+
+    SEARCH_SHARE = (
+        "https://es-l.airbnb.com/rp/jpunales1?location=Bayah%C3%ADbe%2C+Rep%C3%BAblica+Dominicana"
+        "&currentTab=experience_tab&federatedSearchId=8670d415&searchId=065b630a"
+    )
+    EXPERIENCE_SHARE = (
+        "https://es-l.airbnb.com/rp/jpunales1?product=experience&listing_id=3015830"
+    )
+
+    def test_search_share_link_is_flagged(self) -> None:
+        self.assertFalse(points_at_a_listing(self.SEARCH_SHARE))
+
+    def test_experience_share_link_passes(self) -> None:
+        self.assertTrue(points_at_a_listing(self.EXPERIENCE_SHARE))
+
+    def test_plain_experience_url_passes(self) -> None:
+        self.assertTrue(points_at_a_listing("https://www.airbnb.com.co/experiences/3015830"))
+
+    def test_non_airbnb_links_are_left_alone(self) -> None:
+        self.assertTrue(points_at_a_listing("https://www.getyourguide.com/x-t5678"))
+
+    def test_admin_warns_and_skips_the_fetch_for_a_search_link(self) -> None:
+        from django.contrib.admin.sites import site as admin_site
+
+        model_admin = admin_site._registry[Service]
+        request = RequestFactory().post("/admin/concierge/service/add/")
+        s = Service(slug="saona", name_en="Saona", name_es="Saona", referral_url=self.SEARCH_SHARE)
+        with patch("concierge.admin.fetch_preview") as fp, \
+             patch.object(type(model_admin), "message_user") as msg:
+            model_admin.save_model(request, s, Mock(changed_data=["referral_url"]), False)
+        fp.assert_not_called()
+        self.assertIn("shared Airbnb search", msg.call_args[0][1])

@@ -227,6 +227,9 @@ class SiteSettingsAdmin(admin.ModelAdmin):
                     "referral_cta_es",
                     "referral_cta_fr",
                     "referral_disclosure",
+                    "viator_partner_id",
+                    "viator_mcid",
+                    "viator_campaign",
                 ),
                 "description": (
                     "Set a Referral URL on each service, then choose a mode here. "

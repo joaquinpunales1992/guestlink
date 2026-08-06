@@ -3,8 +3,11 @@
 import re
 import secrets
 
+from django.core.validators import RegexValidator
 from django.db import models
 from django.utils import timezone
+
+from .affiliate import CAMPAIGN_RE
 
 
 def normalize_phone(phone: str) -> str:
@@ -28,6 +31,11 @@ def _generate_short_code() -> str:
 class Service(models.Model):
     """A category of service the host offers via the QR (e.g. Saona excursion, airport taxi)."""
 
+    class Channel(models.TextChoices):
+        WHATSAPP = "whatsapp", "WhatsApp — guest messages us"
+        AIRBNB = "airbnb", "Airbnb — guest books via the referral link"
+        VIATOR = "viator", "Viator — guest books via the referral link"
+
     slug = models.SlugField(unique=True)
     name_en = models.CharField(max_length=120)
     # Optional: filled by translating name_en on save when an Anthropic key is
@@ -47,11 +55,6 @@ class Service(models.Model):
         blank=True,
         help_text="Comma-separated keywords used by the fallback classifier when no LLM is available.",
     )
-    class Channel(models.TextChoices):
-        WHATSAPP = "whatsapp", "WhatsApp — guest messages us"
-        AIRBNB = "airbnb", "Airbnb — guest books via the referral link"
-        VIATOR = "viator", "Viator — guest books via the referral link"
-
     channel = models.CharField(
         max_length=20,
         choices=Channel.choices,
@@ -93,9 +96,6 @@ class Service(models.Model):
     def keyword_list(self) -> list[str]:
         return [k.strip().lower() for k in self.keywords.split(",") if k.strip()]
 
-    # The landing page reads these rather than the raw columns so a missing
-    # translation shows the English name instead of an empty card title — and,
-    # in the pre-filled WhatsApp message, instead of "info sobre ." .
     @property
     def uses_referral_link(self) -> bool:
         """True when this card should send guests to the booking provider.
@@ -110,6 +110,9 @@ class Service(models.Model):
         """"Airbnb" / "Viator" for display; empty for WhatsApp."""
         return dict(self.Channel.choices).get(self.channel, "").split(" — ")[0] if self.uses_referral_link else ""
 
+    # The landing page reads these rather than the raw columns so a missing
+    # translation shows the English name instead of an empty card title — and,
+    # in the pre-filled WhatsApp message, instead of "info sobre ." .
     @property
     def display_name_es(self) -> str:
         return self.name_es or self.name_en
@@ -228,6 +231,32 @@ class SiteSettings(models.Model):
             "programme is paused."
         ),
     )
+    viator_partner_id = models.CharField(
+        max_length=32,
+        blank=True,
+        help_text=(
+            "Your Viator affiliate PID, e.g. P00012345. Set this once and any plain "
+            "viator.com product URL becomes a referral link — no need to build one "
+            "per service."
+        ),
+    )
+    viator_mcid = models.CharField(
+        max_length=32,
+        blank=True,
+        help_text="Viator's tracking id for link placements. Leave blank to use 42383.",
+    )
+    viator_campaign = models.CharField(
+        max_length=60,
+        blank=True,
+        validators=[
+            RegexValidator(
+                CAMPAIGN_RE,
+                "Letters, numbers and dashes only — other characters break Viator's tracking.",
+            )
+        ],
+        help_text="Optional label for your own reporting, e.g. apto-reef-qr.",
+    )
+
     referral_cta_en = models.CharField(max_length=60, default="Book online")
     referral_cta_es = models.CharField(max_length=60, default="Reservar online")
     referral_cta_fr = models.CharField(max_length=60, default="Réserver en ligne")

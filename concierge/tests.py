@@ -8,11 +8,14 @@ from __future__ import annotations
 
 import html as html_lib
 from io import BytesIO
+from urllib.parse import parse_qsl, urlparse
 from unittest.mock import Mock, patch
 
+from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.test import RequestFactory, TestCase, override_settings
 
+from concierge.affiliate import is_viator, viator_url
 from concierge.classifier import Classification
 from concierge.models import Guest, Message, Provider, Service, SiteSettings, Ticket
 from concierge.referral_preview import (
@@ -753,3 +756,86 @@ class ServiceChannelTests(TestCase):
 
     def test_disclosure_shows_when_any_channel_is_a_referral(self) -> None:
         self.assertIn("commission", self._render())
+
+
+class ViatorAffiliateUrlTests(TestCase):
+    """Any viator.com URL becomes a referral link from one configured PID."""
+
+    PID = "P00012345"
+    PLAIN = "https://www.viator.com/tours/Bayahibe/Saona/d5021-123456P7"
+
+    def _params(self, url):
+        return dict(parse_qsl(urlparse(url).query))
+
+    def test_parameters_are_appended_to_a_plain_product_url(self) -> None:
+        out = viator_url(self.PLAIN, pid=self.PID)
+        self.assertEqual(
+            self._params(out), {"pid": self.PID, "mcid": "42383", "medium": "link"}
+        )
+        self.assertTrue(out.startswith(self.PLAIN + "?"))
+
+    def test_existing_query_parameters_are_preserved(self) -> None:
+        out = viator_url(self.PLAIN + "?m=1&sortType=rating", pid=self.PID)
+        params = self._params(out)
+        self.assertEqual(params["m"], "1")
+        self.assertEqual(params["sortType"], "rating")
+        self.assertEqual(params["pid"], self.PID)
+
+    def test_existing_tracking_is_never_overwritten(self) -> None:
+        # Viator will not pay out if pid or mcid is modified — a link the host
+        # pasted with its own tracking must survive untouched.
+        already = self.PLAIN + "?pid=P00099999&mcid=11111&medium=banner"
+        self.assertEqual(self._params(viator_url(already, pid=self.PID)), self._params(already))
+
+    def test_campaign_is_added_only_when_configured(self) -> None:
+        self.assertNotIn("campaign", self._params(viator_url(self.PLAIN, pid=self.PID)))
+        out = viator_url(self.PLAIN, pid=self.PID, campaign="apto-reef-qr")
+        self.assertEqual(self._params(out)["campaign"], "apto-reef-qr")
+
+    def test_custom_mcid_overrides_the_default(self) -> None:
+        self.assertEqual(self._params(viator_url(self.PLAIN, pid=self.PID, mcid="99999"))["mcid"], "99999")
+
+    def test_non_viator_and_unconfigured_urls_pass_through(self) -> None:
+        airbnb = "https://es-l.airbnb.com/rp/x?listing_id=1"
+        self.assertEqual(viator_url(airbnb, pid=self.PID), airbnb)      # not viator
+        self.assertEqual(viator_url(self.PLAIN, pid=""), self.PLAIN)    # no PID set
+        self.assertEqual(viator_url("", pid=self.PID), "")
+
+    def test_lookalike_domains_are_not_treated_as_viator(self) -> None:
+        self.assertFalse(is_viator("https://viator.com.evil.example/tours/x"))
+
+
+@override_settings(
+    ALLOWED_HOSTS=["testserver"], WHATSAPP_BUSINESS_NUMBER="573222448409", ANTHROPIC_API_KEY=""
+)
+class ViatorAffiliateRenderingTests(TestCase):
+    PLAIN = "https://www.viator.com/tours/Bayahibe/Saona/d5021-123456P7"
+
+    def setUp(self) -> None:
+        Service.objects.create(
+            slug="saona", name_en="Saona", channel=Service.Channel.VIATOR, referral_url=self.PLAIN
+        )
+        self.site = SiteSettings.load()
+        self.site.cta_mode = SiteSettings.CtaMode.REFERRAL
+
+    def _html(self) -> str:
+        self.site.save()
+        return html_lib.unescape(self.client.get("/").content.decode())
+
+    def test_the_rendered_link_carries_the_affiliate_id(self) -> None:
+        self.site.viator_partner_id = "P00012345"
+        self.site.viator_campaign = "apto-reef-qr"
+        html = self._html()
+        self.assertIn("pid=P00012345", html)
+        self.assertIn("mcid=42383", html)
+        self.assertIn("campaign=apto-reef-qr", html)
+
+    def test_without_a_pid_the_plain_link_still_renders(self) -> None:
+        html = self._html()
+        self.assertIn(self.PLAIN, html)
+        self.assertNotIn("pid=", html)
+
+    def test_campaign_rejects_characters_that_break_tracking(self) -> None:
+        self.site.viator_campaign = "apto reef!"
+        with self.assertRaises(ValidationError):
+            self.site.full_clean()

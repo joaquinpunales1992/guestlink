@@ -13,6 +13,7 @@ from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
+from .affiliate import viator_url
 from .models import Service, SiteSettings, Ticket
 from .relay import handle_inbound
 
@@ -91,6 +92,19 @@ def landing(request: HttpRequest) -> HttpResponse:
     # with no URL still falls back to WhatsApp, so a card is never a dead end
     # while the links are being filled in.
     show_referrals = site.cta_mode in (SiteSettings.CtaMode.REFERRAL, SiteSettings.CtaMode.BOTH)
+
+    # Viator attributes bookings from query parameters on any viator.com URL, so
+    # the host pastes a plain product link and the affiliate id is stamped on
+    # here — one setting instead of a hand-built link per service. Resolved in
+    # the view rather than as a model property so SiteSettings is read once for
+    # the page, not once per card.
+    for service in services:
+        service.resolved_url = viator_url(
+            service.referral_url,
+            pid=site.viator_partner_id,
+            mcid=site.viator_mcid,
+            campaign=site.viator_campaign,
+        )
     return render(
         request,
         "concierge/landing.html",

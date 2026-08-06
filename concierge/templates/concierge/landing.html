@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>{{ site.tab_title }}</title>
+  <title>{{ copy.tab_title }}</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,500;0,9..144,600;1,9..144,400;1,9..144,500&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -153,14 +153,14 @@
         <span class="fr">Bayahibe · République Dominicaine</span>
       </div>
       <h1>
-        <span class="en">{{ site.headline_en }}</span>
-        <span class="es">{{ site.headline_es }}</span>
-        <span class="fr">{{ site.headline_fr|default:site.headline_en }}</span>
+        <span class="en">{{ copy.headline_en }}</span>
+        <span class="es">{{ copy.headline_es }}</span>
+        <span class="fr">{{ copy.headline_fr|default:copy.headline_en }}</span>
       </h1>
       <p class="tagline">
-        <span class="en">{{ site.tagline_en }}</span>
-        <span class="es">{{ site.tagline_es|default:site.tagline_en }}</span>
-        <span class="fr">{{ site.tagline_fr|default:site.tagline_en }}</span>
+        <span class="en">{{ copy.tagline_en }}</span>
+        <span class="es">{{ copy.tagline_es|default:copy.tagline_en }}</span>
+        <span class="fr">{{ copy.tagline_fr|default:copy.tagline_en }}</span>
       </p>
       <div class="lang-toggle" role="tablist" aria-label="Language">
         <button type="button" data-lang="en" class="active">EN</button>
@@ -253,7 +253,7 @@
 
     <footer>
       <span class="rule" aria-hidden="true"></span>
-      {{ site.footer_text }}
+      {{ copy.footer_text }}
       <span class="footer-links">
         <a href="{% url 'privacy' %}">Privacy</a>
       </span>

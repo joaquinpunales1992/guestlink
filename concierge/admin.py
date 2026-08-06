@@ -165,12 +165,33 @@ class ServiceAdmin(admin.ModelAdmin):
 
 @admin.register(Location)
 class LocationAdmin(admin.ModelAdmin):
-    list_display = ("name", "kind", "qr_url", "menu", "scans_30d", "clicks_30d", "ctr_30d", "active")
+    list_display = ("name", "kind", "qr_url", "qr_downloads", "menu", "scans_30d", "clicks_30d", "ctr_30d", "active")
     list_filter = ("kind", "active")
     search_fields = ("name", "slug", "contact_name", "notes")
     prepopulated_fields = {"slug": ("name",)}
     filter_horizontal = ("services",)
-    readonly_fields = ("created_at",)
+    readonly_fields = ("created_at", "qr_preview")
+    fieldsets = (
+        ("The business", {"fields": ("name", "slug", "kind", "active", "contact_name", "notes")}),
+        (
+            "Its page",
+            {
+                "fields": (
+                    "tab_title",
+                    "headline_en", "headline_es", "headline_fr",
+                    "tagline_en", "tagline_es", "tagline_fr",
+                    "footer_text",
+                ),
+                "description": (
+                    "This venue's own wording. Leave a field blank to use the site-wide "
+                    "default from Site settings."
+                ),
+            },
+        ),
+        ("Menu", {"fields": ("services",)}),
+        ("Attribution", {"fields": ("campaign_code",)}),
+        ("QR code", {"fields": ("qr_preview", "created_at")}),
+    )
 
     def get_queryset(self, request):
         since = timezone.now() - datetime.timedelta(days=30)
@@ -178,6 +199,31 @@ class LocationAdmin(admin.ModelAdmin):
         return super().get_queryset(request).annotate(
             _scans=Count("events", filter=recent & Q(events__kind=LocationEvent.Kind.SCAN), distinct=False),
             _clicks=Count("events", filter=recent & Q(events__kind=LocationEvent.Kind.CLICK), distinct=False),
+        )
+
+    @admin.display(description="QR code")
+    def qr_downloads(self, obj: Location) -> str:
+        if not obj.pk:
+            return "—"
+        svg = reverse("location_qr", args=[obj.slug, "svg"])
+        png = reverse("location_qr", args=[obj.slug, "png"])
+        return format_html(
+            '<a href="{}?download=1">SVG</a> · <a href="{}?download=1">PNG</a>', svg, png
+        )
+
+    @admin.display(description="QR code")
+    def qr_preview(self, obj: Location) -> str:
+        """Shown on the change form so the code can be checked before printing."""
+        if not obj.pk:
+            return "Save the location first, then its QR code appears here."
+        svg = reverse("location_qr", args=[obj.slug, "svg"])
+        png = reverse("location_qr", args=[obj.slug, "png"])
+        return format_html(
+            '<div><img src="{}" alt="QR code for {}" style="width:200px;height:200px">'
+            '<p style="margin:6px 0 0">Encodes <code>/{}</code><br>'
+            'Download: <a href="{}?download=1">SVG (for print)</a> · '
+            '<a href="{}?download=1">PNG</a></p></div>',
+            svg, obj.name, obj.slug, svg, png,
         )
 
     @admin.display(description="QR points at")

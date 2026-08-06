@@ -11,10 +11,13 @@ from io import BytesIO
 from urllib.parse import parse_qsl, quote, urlparse
 from unittest.mock import Mock, patch
 
+import qrcode
+from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.test import RequestFactory, TestCase, override_settings
 
+from concierge import qr
 from concierge.affiliate import is_viator, viator_url
 from concierge.classifier import Classification
 from concierge.models import (
@@ -998,3 +1001,115 @@ class PrivacyPolicyAccuracyTests(TestCase):
         self.assertNotIn("Nothing is collected from you automatically", html)
         # And it must still be honest about what is NOT stored.
         self.assertIn("no IP address", html)
+
+
+class LocationQrTests(TestCase):
+    """A printable QR per venue, generated from its landing URL."""
+
+    def setUp(self) -> None:
+        self.loc = Location.objects.create(name="Restaurante La Bahía", slug="la-bahia")
+        User = get_user_model()
+        self.staff = User.objects.create_user("staffer", password="pw", is_staff=True)
+
+    def test_payload_is_the_absolute_landing_url_without_a_trailing_slash(self) -> None:
+        # A trailing slash would encode a longer string (denser code) anddiffer from
+        # the payload already printed on the apartment's cards.
+        request = RequestFactory().get("/admin/")
+        self.assertEqual(qr.payload(request, self.loc), "http://testserver/la-bahia")
+
+    def test_svg_renders_and_is_scalable(self) -> None:
+        body = qr.svg_bytes("https://bookyourtickets.online/la-bahia")
+        self.assertIn(b"<svg", body)
+        self.assertIn(b"path", body)  # vector, not an embedded bitmap
+
+    def test_png_renders_with_a_valid_header(self) -> None:
+        self.assertTrue(qr.png_bytes("https://bookyourtickets.online/la-bahia").startswith(b"\x89PNG\r\n\x1a\n"))
+
+    def test_quiet_zone_and_error_correction_are_print_safe(self) -> None:
+        # Scanners need the 4-module quiet zone; Q survives a scuffed card.
+        self.assertGreaterEqual(qr.BORDER, 4)
+        self.assertEqual(qr.ERROR_CORRECTION, qrcode.constants.ERROR_CORRECT_Q)
+
+    @override_settings(ALLOWED_HOSTS=["testserver"])
+    def test_the_view_serves_both_formats_to_staff(self) -> None:
+        self.client.force_login(self.staff)
+        svg = self.client.get("/qr/la-bahia.svg")
+        png = self.client.get("/qr/la-bahia.png")
+        self.assertEqual(svg["Content-Type"], "image/svg+xml")
+        self.assertEqual(png["Content-Type"], "image/png")
+        self.assertIn("inline", svg["Content-Disposition"])
+
+    @override_settings(ALLOWED_HOSTS=["testserver"])
+    def test_download_flag_sets_a_filename(self) -> None:
+        self.client.force_login(self.staff)
+        resp = self.client.get("/qr/la-bahia.svg?download=1")
+        self.assertIn('attachment; filename="qr-la-bahia.svg"', resp["Content-Disposition"])
+
+    @override_settings(ALLOWED_HOSTS=["testserver"])
+    def test_it_is_staff_only(self) -> None:
+        self.assertEqual(self.client.get("/qr/la-bahia.svg").status_code, 302)  # to admin login
+
+    @override_settings(ALLOWED_HOSTS=["testserver"])
+    def test_unknown_venue_is_a_404(self) -> None:
+        self.client.force_login(self.staff)
+        self.assertEqual(self.client.get("/qr/nope.svg").status_code, 404)
+
+    @override_settings(ALLOWED_HOSTS=["testserver"])
+    def test_the_qr_route_is_not_shadowed_by_a_location_slug(self) -> None:
+        Location.objects.create(name="Impostor", slug="qr")
+        self.client.force_login(self.staff)
+        self.assertEqual(self.client.get("/qr/la-bahia.svg")["Content-Type"], "image/svg+xml")
+
+
+@override_settings(ALLOWED_HOSTS=["testserver"], WHATSAPP_BUSINESS_NUMBER="573222448409")
+class LocationBrandingTests(TestCase):
+    """A location is a business, so it carries its own page copy."""
+
+    def setUp(self) -> None:
+        Service.objects.create(slug="taxi", name_en="Airport taxi")
+        self.site = SiteSettings.load()
+        self.site.tab_title = "Default tab"
+        self.site.headline_en = "Default headline"
+        self.site.tagline_en = "Default tagline"
+        self.site.footer_text = "Default footer"
+        self.site.save()
+
+    def test_a_venue_overrides_the_site_copy(self) -> None:
+        Location.objects.create(
+            name="Restaurante La Bahía", slug="la-bahia",
+            tab_title="La Bahía · Bayahibe",
+            headline_en="Welcome to La Bahía",
+            tagline_en="Ask us about anything nearby.",
+            footer_text="Restaurante La Bahía",
+        )
+        html = self.client.get("/la-bahia/").content.decode()
+        self.assertIn("<title>La Bahía · Bayahibe</title>", html)
+        self.assertIn("Welcome to La Bahía", html)
+        self.assertIn("Ask us about anything nearby.", html)
+        self.assertNotIn("Default headline", html)
+
+    def test_blank_fields_fall_back_to_the_site_default(self) -> None:
+        # A venue added in a hurry still renders a complete page.
+        Location.objects.create(name="Scuba Caribe", slug="scuba-caribe", headline_en="Dive with us")
+        html = self.client.get("/scuba-caribe/").content.decode()
+        self.assertIn("Dive with us", html)          # its own
+        self.assertIn("<title>Default tab</title>", html)  # inherited
+        self.assertIn("Default footer", html)
+
+    def test_the_bare_domain_uses_the_site_defaults(self) -> None:
+        html = self.client.get("/").content.decode()
+        self.assertIn("<title>Default tab</title>", html)
+        self.assertIn("Default headline", html)
+
+    def test_two_venues_render_different_identities(self) -> None:
+        Location.objects.create(name="A", slug="venue-a", headline_en="I am A")
+        Location.objects.create(name="B", slug="venue-b", headline_en="I am B")
+        self.assertIn("I am A", self.client.get("/venue-a/").content.decode())
+        self.assertIn("I am B", self.client.get("/venue-b/").content.decode())
+
+    def test_the_apartment_kept_its_original_copy_through_the_move(self) -> None:
+        # Migration 0015 stamps the old site-wide copy onto the apartment so its
+        # page does not silently change when the defaults later do.
+        apto = Location.objects.filter(slug="the-reef-401").first()
+        self.assertIsNotNone(apto)
+        self.assertTrue(apto.headline_en, "the apartment should carry its own headline")

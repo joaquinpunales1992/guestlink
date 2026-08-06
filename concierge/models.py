@@ -162,6 +162,22 @@ class Location(models.Model):
             "and dashes only; anything else breaks Viator's attribution."
         ),
     )
+    # --- how this business presents itself -------------------------------
+    # Each location is its own business with its own page. Every field here is
+    # optional and falls back to the site-wide default, so a venue you have not
+    # written copy for still renders — and the original single-apartment setup
+    # keeps working unchanged.
+    tab_title = models.CharField(
+        max_length=120, blank=True, help_text="Browser tab title. Blank uses the site default."
+    )
+    headline_en = models.CharField(max_length=160, blank=True, help_text="The big line at the top.")
+    headline_es = models.CharField(max_length=160, blank=True)
+    headline_fr = models.CharField(max_length=160, blank=True)
+    tagline_en = models.CharField(max_length=240, blank=True, help_text="The sentence under the headline.")
+    tagline_es = models.CharField(max_length=240, blank=True)
+    tagline_fr = models.CharField(max_length=240, blank=True)
+    footer_text = models.CharField(max_length=200, blank=True)
+
     contact_name = models.CharField(max_length=120, blank=True)
     notes = models.TextField(blank=True, help_text="Internal — revenue share agreed, who to invoice, etc.")
     active = models.BooleanField(default=True)
@@ -173,10 +189,24 @@ class Location(models.Model):
     def __str__(self) -> str:
         return self.name
 
+    # Copy fields this venue can override; anything blank falls back site-wide.
+    BRANDING_FIELDS = (
+        "tab_title", "footer_text",
+        "headline_en", "headline_es", "headline_fr",
+        "tagline_en", "tagline_es", "tagline_fr",
+    )
+
     @property
     def viator_campaign(self) -> str:
         """Campaign code sent to Viator; the slug is a sensible default."""
         return self.campaign_code or self.slug
+
+    def branding(self, site) -> dict:
+        """This venue's page copy, filling any gap from the site defaults."""
+        return {
+            field: (getattr(self, field, "") or getattr(site, field, ""))
+            for field in self.BRANDING_FIELDS
+        }
 
     def visible_services(self):
         """Active services for this venue — all of them when none are chosen."""

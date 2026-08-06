@@ -15,6 +15,8 @@ urlpatterns = [
     path("privacy/", concierge_views.privacy, name="privacy"),
     path("healthz/", concierge_views.healthz, name="healthz"),
     path("go/<slug:service_slug>/", concierge_views.go, name="go"),
+    # Staff-only, and declared before the location catch-all below.
+    path("qr/<slug:slug>.<str:fmt>", concierge_views.location_qr, name="location_qr"),
 ]
 
 # Every QR code points at /<location-slug>. These come last so the fixed routes

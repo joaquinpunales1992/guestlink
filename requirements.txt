@@ -12,6 +12,10 @@ django>=4.2,<5.0
 
 # 3.9 support: Pillow dropped it in 12.x, so cap below that.
 pillow>=10.0.0,<12.0.0
+
+# QR codes for each location's landing page. Pure Python; renders SVG on its
+# own and PNG via Pillow, which is already a dependency.
+qrcode>=7.4,<9.0
 whitenoise>=6.6,<7.0
 python-dotenv>=1.0.0
 requests>=2.31.0

@@ -20,6 +20,7 @@ from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
+from . import qr
 from .links import LANGUAGES, destination, place_name
 from .models import Location, LocationEvent, Service, SiteSettings, Ticket
 from .relay import handle_inbound
@@ -160,6 +161,10 @@ def landing(request: HttpRequest, slug: str = "") -> HttpResponse:
             lang: _tracked(service.slug, location, lang, whatsapp=True) for lang in LANGUAGES
         }
 
+    # A location is its own business, so its title/headline/tagline win over the
+    # site-wide defaults; blanks fall through so a half-written venue still renders.
+    copy = location.branding(site) if location else {f: getattr(site, f, "") for f in Location.BRANDING_FIELDS}
+
     LocationEvent.objects.create(location=location, kind=LocationEvent.Kind.SCAN)
 
     return render(
@@ -169,6 +174,7 @@ def landing(request: HttpRequest, slug: str = "") -> HttpResponse:
             "services": services,
             "location": location,
             "place_name": place_name(location),
+            "copy": copy,
             "host_name": settings.HOST_NAME,
             "site": site,
             "show_referrals": show_referrals,
@@ -177,6 +183,28 @@ def landing(request: HttpRequest, slug: str = "") -> HttpResponse:
             "any_referral": show_referrals and any(s.uses_referral_link for s in services),
         },
     )
+
+
+@staff_member_required
+def location_qr(request: HttpRequest, slug: str, fmt: str) -> HttpResponse:
+    """The venue's QR code, as SVG (for print) or PNG.
+
+    Staff-only: these are not secret, but they are operational assets rather
+    than part of the guest-facing site.
+    """
+    location = get_object_or_404(Location, slug=slug)
+    data = qr.payload(request, location)
+
+    if fmt == "svg":
+        body, content_type = qr.svg_bytes(data), "image/svg+xml"
+    else:
+        body, content_type = qr.png_bytes(data), "image/png"
+
+    response = HttpResponse(body, content_type=content_type)
+    # inline so the admin can preview it; the download links add ?download=1
+    disposition = "attachment" if request.GET.get("download") else "inline"
+    response["Content-Disposition"] = f'{disposition}; filename="qr-{location.slug}.{fmt}"'
+    return response
 
 
 def privacy(request: HttpRequest) -> HttpResponse:

@@ -6,6 +6,7 @@ messages are still persisted as Message rows, which is what we assert against.
 
 from __future__ import annotations
 
+import html as html_lib
 from io import BytesIO
 from unittest.mock import Mock, patch
 
@@ -285,7 +286,10 @@ class LandingCtaModeTests(TestCase):
     def setUp(self) -> None:
         # One service with a referral link, one without — the mixed catalogue
         # is the case that matters, since links get filled in gradually.
-        Service.objects.create(slug="saona", name_en="Saona", name_es="Saona", referral_url=self.REF)
+        Service.objects.create(
+            slug="saona", name_en="Saona", name_es="Saona",
+            channel=Service.Channel.AIRBNB, referral_url=self.REF,
+        )
         Service.objects.create(slug="taxi", name_en="Airport taxi", name_es="Taxi")
 
     def _render(self, mode: str) -> str:
@@ -679,3 +683,73 @@ class MissingTranslationFallbackTests(TestCase):
         self.assertNotIn('<span class="fr"></span>', html)
         # And the pre-filled Spanish message is not "info sobre ."
         self.assertNotIn("sobre%20.", html)
+
+
+@override_settings(
+    ALLOWED_HOSTS=["testserver"],
+    WHATSAPP_BUSINESS_NUMBER="573222448409",
+    HOST_APARTMENT_LABEL="Reef",
+    ANTHROPIC_API_KEY="",
+)
+class ServiceChannelTests(TestCase):
+    """Each service picks its own destination: WhatsApp, Airbnb, or Viator."""
+
+    WA = "https://wa.me/573222448409?text="
+    AIRBNB = "https://es-l.airbnb.com/rp/jpunales1?product=experience&listing_id=591291"
+    VIATOR = "https://www.viator.com/tours/Bayahibe/Saona/d123-abc?pid=P00012345"
+
+    def setUp(self) -> None:
+        self.saona = Service.objects.create(
+            slug="saona", name_en="Saona", channel=Service.Channel.AIRBNB, referral_url=self.AIRBNB
+        )
+        self.catalina = Service.objects.create(
+            slug="catalina", name_en="Catalina", channel=Service.Channel.VIATOR, referral_url=self.VIATOR
+        )
+        self.taxi = Service.objects.create(
+            slug="taxi", name_en="Airport taxi", channel=Service.Channel.WHATSAPP
+        )
+
+    def _render(self, mode=SiteSettings.CtaMode.REFERRAL) -> str:
+        site = SiteSettings.load()
+        site.cta_mode = mode
+        site.save()
+        # Unescape: Django renders & as &amp; inside href attributes.
+        return html_lib.unescape(self.client.get("/").content.decode())
+
+    def test_each_channel_routes_to_its_own_destination(self) -> None:
+        html = self._render()
+        self.assertIn(self.AIRBNB, html)
+        self.assertIn(self.VIATOR, html)
+        self.assertIn(self.WA, html)  # the taxi
+
+    def test_whatsapp_channel_ignores_a_referral_url_that_is_set(self) -> None:
+        # Switching a service back to WhatsApp must take effect even though the
+        # link is still on record — the host may be pausing a programme.
+        parked = "https://www.viator.com/tours/parked-d999"
+        self.taxi.referral_url = parked
+        self.taxi.channel = Service.Channel.WHATSAPP
+        self.taxi.save()
+        self.assertFalse(self.taxi.uses_referral_link)
+        self.assertNotIn(parked, self._render())
+
+    def test_referral_channel_without_a_link_falls_back_to_whatsapp(self) -> None:
+        self.saona.referral_url = ""
+        self.saona.save()
+        self.assertFalse(self.saona.uses_referral_link)
+        html = self._render()
+        self.assertNotIn("airbnb.com", html)
+        self.assertIn(self.WA, html)
+
+    def test_site_wide_kill_switch_overrides_every_channel(self) -> None:
+        html = self._render(SiteSettings.CtaMode.WHATSAPP)
+        self.assertNotIn("airbnb.com", html)
+        self.assertNotIn("viator.com", html)
+        self.assertNotIn("commission", html)  # nothing to disclose
+
+    def test_channel_label_names_the_provider(self) -> None:
+        self.assertEqual(self.saona.channel_label, "Airbnb")
+        self.assertEqual(self.catalina.channel_label, "Viator")
+        self.assertEqual(self.taxi.channel_label, "")
+
+    def test_disclosure_shows_when_any_channel_is_a_referral(self) -> None:
+        self.assertIn("commission", self._render())

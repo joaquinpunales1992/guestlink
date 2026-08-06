@@ -86,8 +86,10 @@ def landing(request: HttpRequest) -> HttpResponse:
     site = SiteSettings.load()
     business_number = (settings.WHATSAPP_BUSINESS_NUMBER or "").lstrip("+") or "REPLACE_WITH_E164_DIGITS"
 
-    # A service with no referral_url always keeps its WhatsApp button, so a card
-    # is never a dead end while the referral links are being filled in.
+    # Each service picks its own channel; cta_mode is the site-wide switch over
+    # them, whose first option routes every card to WhatsApp. A referral channel
+    # with no URL still falls back to WhatsApp, so a card is never a dead end
+    # while the links are being filled in.
     show_referrals = site.cta_mode in (SiteSettings.CtaMode.REFERRAL, SiteSettings.CtaMode.BOTH)
     return render(
         request,
@@ -101,7 +103,7 @@ def landing(request: HttpRequest) -> HttpResponse:
             "show_referrals": show_referrals,
             "show_whatsapp_fallback": site.cta_mode == SiteSettings.CtaMode.BOTH,
             # Only disclose when a referral link is actually on the page.
-            "any_referral": show_referrals and any(s.referral_url for s in services),
+            "any_referral": show_referrals and any(s.uses_referral_link for s in services),
         },
     )
 

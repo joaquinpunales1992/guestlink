@@ -47,6 +47,21 @@ class Service(models.Model):
         blank=True,
         help_text="Comma-separated keywords used by the fallback classifier when no LLM is available.",
     )
+    class Channel(models.TextChoices):
+        WHATSAPP = "whatsapp", "WhatsApp — guest messages us"
+        AIRBNB = "airbnb", "Airbnb — guest books via the referral link"
+        VIATOR = "viator", "Viator — guest books via the referral link"
+
+    channel = models.CharField(
+        max_length=20,
+        choices=Channel.choices,
+        default=Channel.WHATSAPP,
+        help_text=(
+            "Where this service's button sends guests. Airbnb and Viator both need "
+            "a Referral URL below — without one the card falls back to WhatsApp so "
+            "it is never a dead end."
+        ),
+    )
     referral_url = models.URLField(
         blank=True,
         # URLField defaults to 200, which renders maxlength="200" on the admin
@@ -56,10 +71,9 @@ class Service(models.Model):
         # got cut off.
         max_length=800,
         help_text=(
-            "Affiliate or referral link for this service (e.g. an Airbnb experience). "
-            "Paste the whole link — Airbnb's are long, and the listing_id near the end "
-            "is what points at the right experience. Services without one fall back "
-            "to WhatsApp."
+            "Affiliate or referral link, matching the channel above. Paste the whole "
+            "link — Airbnb's are long, and the listing_id near the end is what points "
+            "at the right experience."
         ),
     )
     default_provider = models.ForeignKey(
@@ -82,6 +96,20 @@ class Service(models.Model):
     # The landing page reads these rather than the raw columns so a missing
     # translation shows the English name instead of an empty card title — and,
     # in the pre-filled WhatsApp message, instead of "info sobre ." .
+    @property
+    def uses_referral_link(self) -> bool:
+        """True when this card should send guests to the booking provider.
+
+        A referral channel with no URL falls back to WhatsApp rather than
+        rendering a card that goes nowhere — links get filled in gradually.
+        """
+        return self.channel in (self.Channel.AIRBNB, self.Channel.VIATOR) and bool(self.referral_url)
+
+    @property
+    def channel_label(self) -> str:
+        """"Airbnb" / "Viator" for display; empty for WhatsApp."""
+        return dict(self.Channel.choices).get(self.channel, "").split(" — ")[0] if self.uses_referral_link else ""
+
     @property
     def display_name_es(self) -> str:
         return self.name_es or self.name_en
@@ -186,18 +214,18 @@ class SiteSettings(models.Model):
     """Singleton holding admin-editable copy for the guest-facing landing page."""
 
     class CtaMode(models.TextChoices):
-        WHATSAPP = "whatsapp", "WhatsApp only"
-        REFERRAL = "referral", "Referral link only (WhatsApp used where no link is set)"
-        BOTH = "both", "Referral link, with WhatsApp underneath"
+        WHATSAPP = "whatsapp", "WhatsApp for everything (ignore each service's channel)"
+        REFERRAL = "referral", "Use each service's own channel"
+        BOTH = "both", "Use each service's channel, with WhatsApp underneath"
 
     cta_mode = models.CharField(
         max_length=20,
         choices=CtaMode.choices,
         default=CtaMode.WHATSAPP,
         help_text=(
-            "What each service card links to. Referral modes need a Referral URL on "
-            "the service; any service without one keeps its WhatsApp button so the "
-            "card is never a dead end."
+            "Site-wide switch over the per-service Channel. The first option is a "
+            "kill switch that routes every card to WhatsApp — useful if a referral "
+            "programme is paused."
         ),
     )
     referral_cta_en = models.CharField(max_length=60, default="Book online")

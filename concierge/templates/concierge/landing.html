@@ -181,10 +181,10 @@
         A service keeps its WhatsApp button whenever it has no referral_url, so
         a half-filled catalogue never renders a card that goes nowhere.
       {% endcomment %}
-      {% if show_referrals and s.referral_url %}
+      {% if show_referrals and s.uses_referral_link %}
       <div class="service">
         <a class="primary" href="{{ s.referral_url }}" target="_blank" rel="noopener nofollow sponsored"
-           aria-label="{{ s.name_en }} — book online (opens in a new tab)">
+           aria-label="{{ s.name_en }} — book on {{ s.channel_label }} (opens in a new tab)">
           <div class="banner">
             {% if s.image %}<img src="{{ s.image.url }}" alt="" loading="lazy">{% endif %}
           </div>

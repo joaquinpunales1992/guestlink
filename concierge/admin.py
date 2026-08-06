@@ -23,10 +23,10 @@ def _is_fetched_image(service: Service) -> bool:
 @admin.register(Service)
 class ServiceAdmin(admin.ModelAdmin):
     list_display = (
-        "name_en", "slug", "has_referral", "default_provider",
+        "name_en", "slug", "channel", "has_referral", "default_provider",
         "expected_commission_usd", "active", "sort_order",
     )
-    list_filter = ("active",)
+    list_filter = ("channel", "active")
     search_fields = ("name_en", "name_es", "name_fr", "slug", "keywords")
 
     actions = ["fetch_preview_images", "fetch_preview_images_replacing", "translate_names"]
@@ -103,7 +103,7 @@ class ServiceAdmin(admin.ModelAdmin):
             names = ", ".join(f"{c.upper()}: “{getattr(service, f'name_{c}')}”" for c in filled)
             self.message_user(request, f"Translated the name — {names}. Edit if you'd word it differently.")
 
-    @admin.display(description="referral link", boolean=True, ordering="referral_url")
+    @admin.display(description="link set", boolean=True, ordering="referral_url")
     def has_referral(self, obj: Service) -> bool:
         return bool(obj.referral_url)
 

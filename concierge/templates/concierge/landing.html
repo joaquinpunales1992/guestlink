@@ -176,14 +176,13 @@
   <main class="wrap">
     <div class="grid">
     {% for s in services %}
-      {% with msg_en="Hi! I'm staying at Apto "|add:apartment_label|add:". I'd like info about "|add:s.name_en|add:"." msg_es="Hola! Estoy en el Apto "|add:apartment_label|add:". Quisiera info sobre "|add:s.display_name_es|add:"." msg_fr="Bonjour ! Je séjourne à l'Apto "|add:apartment_label|add:". Je voudrais des informations sur "|add:s.display_name_fr|add:"." %}
-      {% comment %}
+            {% comment %}
         A service keeps its WhatsApp button whenever it has no referral_url, so
         a half-filled catalogue never renders a card that goes nowhere.
       {% endcomment %}
       {% if show_referrals and s.uses_referral_link %}
       <div class="service">
-        <a class="primary" href="{{ s.resolved_url }}" target="_blank" rel="noopener nofollow sponsored"
+        <a class="primary" href="{{ s.tracked.en }}" target="_blank" rel="noopener nofollow sponsored"
            aria-label="{{ s.name_en }} — book on {{ s.channel_label }} (opens in a new tab)">
           <div class="banner">
             {% if s.image %}<img src="{{ s.image.url }}" alt="" loading="lazy">{% endif %}
@@ -204,10 +203,10 @@
         </a>
         {% if show_whatsapp_fallback %}
         <a class="secondary"
-           href="https://wa.me/{{ business_number }}?text={{ msg_en|urlencode }}"
-           data-href-en="https://wa.me/{{ business_number }}?text={{ msg_en|urlencode }}"
-           data-href-es="https://wa.me/{{ business_number }}?text={{ msg_es|urlencode }}"
-           data-href-fr="https://wa.me/{{ business_number }}?text={{ msg_fr|urlencode }}"
+           href="{{ s.tracked_whatsapp.en }}"
+           data-href-en="{{ s.tracked_whatsapp.en }}"
+           data-href-es="{{ s.tracked_whatsapp.es }}"
+           data-href-fr="{{ s.tracked_whatsapp.fr }}"
            aria-label="{{ s.name_en }} — ask on WhatsApp">
           <svg viewBox="0 0 32 32" aria-hidden="true"><path d="M16 .5C7.44.5.5 7.44.5 16c0 2.82.74 5.46 2.03 7.75L.5 31.5l7.94-2.02A15.4 15.4 0 0016 31.5C24.56 31.5 31.5 24.56 31.5 16S24.56.5 16 .5zm0 28.2c-2.5 0-4.85-.67-6.87-1.85l-.49-.29-4.71 1.2 1.26-4.58-.32-.5A12.6 12.6 0 013.3 16C3.3 8.98 8.98 3.3 16 3.3S28.7 8.98 28.7 16 23.02 28.7 16 28.7zm7.03-9.44c-.38-.19-2.26-1.11-2.61-1.24-.35-.13-.6-.19-.86.19-.25.38-.98 1.24-1.2 1.49-.22.25-.44.28-.82.09-.38-.19-1.61-.59-3.06-1.89-1.13-1.01-1.9-2.26-2.12-2.64-.22-.38-.02-.58.17-.77.17-.17.38-.44.57-.66.19-.22.25-.38.38-.63.13-.25.06-.47-.03-.66-.09-.19-.86-2.07-1.18-2.83-.31-.74-.62-.64-.86-.65l-.73-.01c-.25 0-.66.09-1.01.47-.35.38-1.32 1.29-1.32 3.15 0 1.86 1.35 3.66 1.54 3.91.19.25 2.66 4.06 6.44 5.7.9.39 1.6.62 2.15.79.9.29 1.72.25 2.37.15.72-.11 2.26-.92 2.58-1.81.32-.89.32-1.65.22-1.81-.09-.16-.35-.25-.73-.44z"></path></svg>
           <span class="en">Or ask us on WhatsApp</span>
@@ -219,10 +218,10 @@
       {% else %}
       <div class="service">
         <a class="primary"
-           href="https://wa.me/{{ business_number }}?text={{ msg_en|urlencode }}"
-           data-href-en="https://wa.me/{{ business_number }}?text={{ msg_en|urlencode }}"
-           data-href-es="https://wa.me/{{ business_number }}?text={{ msg_es|urlencode }}"
-           data-href-fr="https://wa.me/{{ business_number }}?text={{ msg_fr|urlencode }}"
+           href="{{ s.tracked.en }}"
+           data-href-en="{{ s.tracked.en }}"
+           data-href-es="{{ s.tracked.es }}"
+           data-href-fr="{{ s.tracked.fr }}"
            aria-label="{{ s.name_en }} — open WhatsApp">
           <div class="banner">
             {% if s.image %}<img src="{{ s.image.url }}" alt="" loading="lazy">{% endif %}
@@ -243,7 +242,6 @@
         </a>
       </div>
       {% endif %}
-      {% endwith %}
     {% empty %}
       <p style="grid-column:1/-1;text-align:center;color:var(--muted)">No services configured yet.</p>
     {% endfor %}

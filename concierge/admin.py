@@ -1,9 +1,13 @@
+import datetime
+
 from django.conf import settings
 from django.contrib import admin, messages
+from django.db.models import Count, Q
+from django.utils import timezone
 from django.urls import reverse
 from django.utils.html import format_html
 
-from .models import Guest, Message, Provider, Service, SiteSettings, Ticket
+from .models import Guest, Location, LocationEvent, Message, Provider, Service, SiteSettings, Ticket
 from .referral_preview import PreviewError, fetch_preview, points_at_a_listing
 from .translate import TranslationError, fill_missing_names
 
@@ -157,6 +161,58 @@ class ServiceAdmin(admin.ModelAdmin):
             )
         if done:
             self.message_user(request, f"{done} image(s) fetched.")
+
+
+@admin.register(Location)
+class LocationAdmin(admin.ModelAdmin):
+    list_display = ("name", "kind", "qr_url", "menu", "scans_30d", "clicks_30d", "ctr_30d", "active")
+    list_filter = ("kind", "active")
+    search_fields = ("name", "slug", "contact_name", "notes")
+    prepopulated_fields = {"slug": ("name",)}
+    filter_horizontal = ("services",)
+    readonly_fields = ("created_at",)
+
+    def get_queryset(self, request):
+        since = timezone.now() - datetime.timedelta(days=30)
+        recent = Q(events__created_at__gte=since)
+        return super().get_queryset(request).annotate(
+            _scans=Count("events", filter=recent & Q(events__kind=LocationEvent.Kind.SCAN), distinct=False),
+            _clicks=Count("events", filter=recent & Q(events__kind=LocationEvent.Kind.CLICK), distinct=False),
+        )
+
+    @admin.display(description="QR points at")
+    def qr_url(self, obj: Location) -> str:
+        return format_html('<a href="/{}" target="_blank">/{}</a>', obj.slug, obj.slug)
+
+    @admin.display(description="menu")
+    def menu(self, obj: Location) -> str:
+        chosen = obj.services.count()
+        return f"{chosen} chosen" if chosen else "all services"
+
+    @admin.display(description="scans (30d)", ordering="_scans")
+    def scans_30d(self, obj: Location) -> int:
+        return obj._scans
+
+    @admin.display(description="clicks (30d)", ordering="_clicks")
+    def clicks_30d(self, obj: Location) -> int:
+        return obj._clicks
+
+    @admin.display(description="click rate (30d)")
+    def ctr_30d(self, obj: Location) -> str:
+        # Scans are page opens, so a rate above 100% just means guests tapped
+        # more than one service — worth seeing rather than clamping.
+        return f"{obj._clicks / obj._scans:.0%}" if obj._scans else "—"
+
+
+@admin.register(LocationEvent)
+class LocationEventAdmin(admin.ModelAdmin):
+    list_display = ("created_at", "kind", "location", "service", "channel")
+    list_filter = ("kind", "channel", "location")
+    date_hierarchy = "created_at"
+    readonly_fields = ("created_at", "kind", "location", "service", "channel")
+
+    def has_add_permission(self, request) -> bool:
+        return False  # written by the site, never by hand
 
 
 @admin.register(Provider)

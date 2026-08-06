@@ -4,17 +4,24 @@ from __future__ import annotations
 
 import json
 import logging
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.contrib.admin.views.decorators import staff_member_required
-from django.http import HttpRequest, HttpResponse, HttpResponseBadRequest, JsonResponse
+from django.http import (
+    HttpRequest,
+    HttpResponse,
+    HttpResponseBadRequest,
+    HttpResponseRedirect,
+    JsonResponse,
+)
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from .affiliate import viator_url
-from .models import Service, SiteSettings, Ticket
+from .links import LANGUAGES, destination, place_name
+from .models import Location, LocationEvent, Service, SiteSettings, Ticket
 from .relay import handle_inbound
 
 logger = logging.getLogger(__name__)
@@ -82,10 +89,59 @@ def _process_message(msg: dict, *, raw: dict) -> None:
         logger.exception("Relay failed for wa_id=%s", wa_id)
 
 
-def landing(request: HttpRequest) -> HttpResponse:
-    services = list(Service.objects.filter(active=True))
+def _tracked(service_slug: str, location, lang: str = "", *, whatsapp: bool = False) -> str:
+    """URL of the counting redirect for one card."""
+    query = {}
+    if location is not None:
+        query["at"] = location.slug
+    if lang:
+        query["lang"] = lang
+    if whatsapp:
+        query["ch"] = "wa"
+    url = reverse("go", args=[service_slug])
+    return f"{url}?{urlencode(query)}" if query else url
+
+
+def go(request: HttpRequest, service_slug: str) -> HttpResponse:
+    """Count the click, then forward to wherever the card points.
+
+    A server-side hop rather than a click beacon: these numbers may settle a
+    revenue share with a venue, so they should not depend on the guest's
+    browser cooperating. Affiliate attribution is unaffected — the destination
+    keeps its tracking parameters.
+    """
+    service = get_object_or_404(Service, slug=service_slug, active=True)
+    location = Location.objects.filter(slug=request.GET.get("at", ""), active=True).first()
+    lang = request.GET.get("lang", "en")
+    lang = lang if lang in LANGUAGES else "en"
+    force_whatsapp = request.GET.get("ch") == "wa"
+
     site = SiteSettings.load()
-    business_number = (settings.WHATSAPP_BUSINESS_NUMBER or "").lstrip("+") or "REPLACE_WITH_E164_DIGITS"
+    business_number = (settings.WHATSAPP_BUSINESS_NUMBER or "").lstrip("+")
+    target = destination(
+        service, location, site,
+        lang=lang, force_whatsapp=force_whatsapp, business_number=business_number,
+    )
+
+    LocationEvent.objects.create(
+        location=location,
+        kind=LocationEvent.Kind.CLICK,
+        service=service,
+        channel="whatsapp" if force_whatsapp or "wa.me" in target else service.channel,
+    )
+    # 302: the destination is configuration and can change at any time, so
+    # nothing about this redirect should be cached.
+    return HttpResponseRedirect(target)
+
+
+def landing(request: HttpRequest, slug: str = "") -> HttpResponse:
+    """The QR target. With a slug it is one venue's page; bare "/" is generic."""
+    location = None
+    if slug:
+        location = get_object_or_404(Location, slug=slug, active=True)
+
+    services = list(location.visible_services() if location else Service.objects.filter(active=True))
+    site = SiteSettings.load()
 
     # Each service picks its own channel; cta_mode is the site-wide switch over
     # them, whose first option routes every card to WhatsApp. A referral channel
@@ -93,26 +149,27 @@ def landing(request: HttpRequest) -> HttpResponse:
     # while the links are being filled in.
     show_referrals = site.cta_mode in (SiteSettings.CtaMode.REFERRAL, SiteSettings.CtaMode.BOTH)
 
-    # Viator attributes bookings from query parameters on any viator.com URL, so
-    # the host pastes a plain product link and the affiliate id is stamped on
-    # here — one setting instead of a hand-built link per service. Resolved in
-    # the view rather than as a model property so SiteSettings is read once for
-    # the page, not once per card.
+    # Every outbound link goes through the counting redirect, which resolves the
+    # real destination — including the Viator affiliate parameters and this
+    # venue's campaign code.
     for service in services:
-        service.resolved_url = viator_url(
-            service.referral_url,
-            pid=site.viator_partner_id,
-            mcid=site.viator_mcid,
-            campaign=site.viator_campaign,
-        )
+        service.tracked = {
+            lang: _tracked(service.slug, location, lang) for lang in LANGUAGES
+        }
+        service.tracked_whatsapp = {
+            lang: _tracked(service.slug, location, lang, whatsapp=True) for lang in LANGUAGES
+        }
+
+    LocationEvent.objects.create(location=location, kind=LocationEvent.Kind.SCAN)
+
     return render(
         request,
         "concierge/landing.html",
         {
             "services": services,
-            "business_number": business_number,
+            "location": location,
+            "place_name": place_name(location),
             "host_name": settings.HOST_NAME,
-            "apartment_label": settings.HOST_APARTMENT_LABEL,
             "site": site,
             "show_referrals": show_referrals,
             "show_whatsapp_fallback": site.cta_mode == SiteSettings.CtaMode.BOTH,
@@ -135,7 +192,7 @@ def privacy(request: HttpRequest) -> HttpResponse:
             "host_name": settings.HOST_NAME,
             "business_number": (settings.WHATSAPP_BUSINESS_NUMBER or "").lstrip("+"),
             "contact_email": settings.PRIVACY_CONTACT_EMAIL,
-            "last_updated": "5 August 2026",
+            "last_updated": "6 August 2026",
         },
     )
 

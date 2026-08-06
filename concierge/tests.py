@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import html as html_lib
 from io import BytesIO
-from urllib.parse import parse_qsl, urlparse
+from urllib.parse import parse_qsl, quote, urlparse
 from unittest.mock import Mock, patch
 
 from django.core.exceptions import ValidationError
@@ -17,7 +17,16 @@ from django.test import RequestFactory, TestCase, override_settings
 
 from concierge.affiliate import is_viator, viator_url
 from concierge.classifier import Classification
-from concierge.models import Guest, Message, Provider, Service, SiteSettings, Ticket
+from concierge.models import (
+    Guest,
+    Location,
+    LocationEvent,
+    Message,
+    Provider,
+    Service,
+    SiteSettings,
+    Ticket,
+)
 from concierge.referral_preview import (
     PreviewError,
     canonical_page_url,
@@ -28,6 +37,13 @@ from concierge.referral_preview import (
 from concierge.relay import CODE_RE, _strip_code, handle_inbound, normalize_phone
 from concierge.translate import TranslationError, fill_missing_names, translate
 from concierge.whatsapp import WhatsAppError
+
+
+def destination_of(client, service_slug, **params):
+    """Follow one card's counting redirect and return where it points."""
+    resp = client.get(f"/go/{service_slug}/", params)
+    assert resp.status_code == 302, f"expected a redirect, got {resp.status_code}"
+    return resp["Location"]
 
 
 @override_settings(WHATSAPP_DRY_RUN=True, ANTHROPIC_API_KEY="")
@@ -303,22 +319,23 @@ class LandingCtaModeTests(TestCase):
 
     def test_whatsapp_mode_ignores_referral_urls(self) -> None:
         html = self._render(SiteSettings.CtaMode.WHATSAPP)
-        self.assertNotIn(self.REF, html)
-        self.assertIn(self.WA, html)
         self.assertNotIn("commission", html)
+        self.assertTrue(destination_of(self.client, "saona").startswith(self.WA))
 
     def test_referral_mode_uses_the_link_and_falls_back_per_service(self) -> None:
         html = self._render(SiteSettings.CtaMode.REFERRAL)
-        self.assertIn(self.REF, html)
+        self.assertIn("Book online", html)
+        self.assertEqual(destination_of(self.client, "saona"), self.REF)
         # The taxi has no referral link, so its card must still reach WhatsApp
         # rather than rendering a dead end.
-        self.assertIn(self.WA, html)
-        self.assertIn("Book online", html)
+        self.assertTrue(destination_of(self.client, "taxi").startswith(self.WA))
 
     def test_both_mode_shows_whatsapp_under_the_referral_card(self) -> None:
         html = self._render(SiteSettings.CtaMode.BOTH)
-        self.assertIn(self.REF, html)
         self.assertIn("Or ask us on WhatsApp", html)
+        self.assertEqual(destination_of(self.client, "saona"), self.REF)
+        # The secondary link forces WhatsApp even though the card is a referral.
+        self.assertTrue(destination_of(self.client, "saona", ch="wa").startswith(self.WA))
 
     def test_referral_links_are_not_followed_and_open_safely(self) -> None:
         html = self._render(SiteSettings.CtaMode.REFERRAL)
@@ -720,34 +737,33 @@ class ServiceChannelTests(TestCase):
         return html_lib.unescape(self.client.get("/").content.decode())
 
     def test_each_channel_routes_to_its_own_destination(self) -> None:
-        html = self._render()
-        self.assertIn(self.AIRBNB, html)
-        self.assertIn(self.VIATOR, html)
-        self.assertIn(self.WA, html)  # the taxi
+        self._render()
+        self.assertEqual(destination_of(self.client, "saona"), self.AIRBNB)
+        self.assertTrue(destination_of(self.client, "catalina").startswith(self.VIATOR))
+        self.assertTrue(destination_of(self.client, "taxi").startswith(self.WA))
 
     def test_whatsapp_channel_ignores_a_referral_url_that_is_set(self) -> None:
         # Switching a service back to WhatsApp must take effect even though the
         # link is still on record — the host may be pausing a programme.
-        parked = "https://www.viator.com/tours/parked-d999"
-        self.taxi.referral_url = parked
+        self.taxi.referral_url = "https://www.viator.com/tours/parked-d999"
         self.taxi.channel = Service.Channel.WHATSAPP
         self.taxi.save()
         self.assertFalse(self.taxi.uses_referral_link)
-        self.assertNotIn(parked, self._render())
+        self._render()
+        self.assertTrue(destination_of(self.client, "taxi").startswith(self.WA))
 
     def test_referral_channel_without_a_link_falls_back_to_whatsapp(self) -> None:
         self.saona.referral_url = ""
         self.saona.save()
         self.assertFalse(self.saona.uses_referral_link)
-        html = self._render()
-        self.assertNotIn("airbnb.com", html)
-        self.assertIn(self.WA, html)
+        self._render()
+        self.assertTrue(destination_of(self.client, "saona").startswith(self.WA))
 
     def test_site_wide_kill_switch_overrides_every_channel(self) -> None:
         html = self._render(SiteSettings.CtaMode.WHATSAPP)
-        self.assertNotIn("airbnb.com", html)
-        self.assertNotIn("viator.com", html)
         self.assertNotIn("commission", html)  # nothing to disclose
+        for slug in ("saona", "catalina", "taxi"):
+            self.assertTrue(destination_of(self.client, slug).startswith(self.WA), slug)
 
     def test_channel_label_names_the_provider(self) -> None:
         self.assertEqual(self.saona.channel_label, "Airbnb")
@@ -825,17 +841,160 @@ class ViatorAffiliateRenderingTests(TestCase):
     def test_the_rendered_link_carries_the_affiliate_id(self) -> None:
         self.site.viator_partner_id = "P00012345"
         self.site.viator_campaign = "apto-reef-qr"
-        html = self._html()
-        self.assertIn("pid=P00012345", html)
-        self.assertIn("mcid=42383", html)
-        self.assertIn("campaign=apto-reef-qr", html)
+        self._html()
+        dest = destination_of(self.client, "saona")
+        self.assertIn("pid=P00012345", dest)
+        self.assertIn("mcid=42383", dest)
+        self.assertIn("campaign=apto-reef-qr", dest)
 
     def test_without_a_pid_the_plain_link_still_renders(self) -> None:
-        html = self._html()
-        self.assertIn(self.PLAIN, html)
-        self.assertNotIn("pid=", html)
+        self._html()
+        self.assertEqual(destination_of(self.client, "saona"), self.PLAIN)
 
     def test_campaign_rejects_characters_that_break_tracking(self) -> None:
         self.site.viator_campaign = "apto reef!"
         with self.assertRaises(ValidationError):
             self.site.full_clean()
+
+
+@override_settings(
+    ALLOWED_HOSTS=["testserver"],
+    WHATSAPP_BUSINESS_NUMBER="573222448409",
+    HOST_APARTMENT_LABEL="Reef",
+    ANTHROPIC_API_KEY="",
+)
+class LocationTests(TestCase):
+    """One QR per venue: its own page, its own menu, its own attribution."""
+
+    VIATOR = "https://www.viator.com/tours/Bayahibe/Saona/d5021-123P4"
+
+    def setUp(self) -> None:
+        self.saona = Service.objects.create(
+            slug="saona", name_en="Saona trip", channel=Service.Channel.VIATOR, referral_url=self.VIATOR
+        )
+        self.diving = Service.objects.create(slug="diving", name_en="Diving")
+        self.taxi = Service.objects.create(slug="taxi", name_en="Airport taxi")
+
+        # This slug already exists: migration 0013 creates it from the old
+        # APARTMENT_SLUG setting so the printed cards keep working.
+        self.apto, _ = Location.objects.update_or_create(
+            slug="the-reef-401",
+            defaults={"name": "Apto Reef", "kind": Location.Kind.APARTMENT, "active": True},
+        )
+        self.dive_shop = Location.objects.create(
+            name="Scuba Caribe", slug="scuba-caribe", kind=Location.Kind.DIVE_SHOP
+        )
+        # A dive shop should not advertise a rival dive trip.
+        self.dive_shop.services.set([self.saona, self.taxi])
+
+        site = SiteSettings.load()
+        site.cta_mode = SiteSettings.CtaMode.REFERRAL
+        site.viator_partner_id = "P00012345"
+        site.save()
+
+    def test_the_printed_apartment_slug_survived_the_migration(self) -> None:
+        # Migration 0013 must create this row; without it every QR card already
+        # hanging in the apartment 404s.
+        self.assertTrue(Location.objects.filter(slug="the-reef-401").exists())
+
+    def test_each_location_has_its_own_page(self) -> None:
+        self.assertEqual(self.client.get("/the-reef-401/").status_code, 200)
+        self.assertEqual(self.client.get("/scuba-caribe/").status_code, 200)
+
+    def test_printed_qr_payloads_without_a_trailing_slash_are_served_directly(self) -> None:
+        # A 301 here would cost the guest an extra round trip on mobile data.
+        self.assertEqual(self.client.get("/the-reef-401").status_code, 200)
+
+    def test_an_unknown_or_inactive_slug_is_a_404(self) -> None:
+        self.assertEqual(self.client.get("/no-such-venue/").status_code, 404)
+        Location.objects.filter(slug="scuba-caribe").update(active=False)
+        self.assertEqual(self.client.get("/scuba-caribe/").status_code, 404)
+
+    def test_a_location_shows_only_its_chosen_services(self) -> None:
+        html = self.client.get("/scuba-caribe/").content.decode()
+        self.assertIn("Saona trip", html)
+        self.assertIn("Airport taxi", html)
+        self.assertNotIn("Diving", html)
+
+    def test_no_selection_means_every_active_service(self) -> None:
+        html = self.client.get("/the-reef-401/").content.decode()
+        for name in ("Saona trip", "Diving", "Airport taxi"):
+            self.assertIn(name, html)
+
+    def test_fixed_routes_still_win_over_location_slugs(self) -> None:
+        Location.objects.create(name="Impostor", slug="privacy")
+        self.assertIn("Privacy Policy", self.client.get("/privacy/").content.decode())
+
+    # ---- attribution -------------------------------------------------------
+
+    def test_viator_campaign_defaults_to_the_location_slug(self) -> None:
+        dest = destination_of(self.client, "saona", at="scuba-caribe")
+        self.assertIn("campaign=scuba-caribe", dest)
+        self.assertIn("pid=P00012345", dest)
+
+    def test_an_explicit_campaign_code_overrides_the_slug(self) -> None:
+        Location.objects.filter(slug="scuba-caribe").update(campaign_code="dive-partner-a")
+        self.assertIn("campaign=dive-partner-a", destination_of(self.client, "saona", at="scuba-caribe"))
+
+    def test_two_locations_produce_different_campaigns_for_one_link(self) -> None:
+        a = destination_of(self.client, "saona", at="scuba-caribe")
+        b = destination_of(self.client, "saona", at="the-reef-401")
+        self.assertIn("campaign=scuba-caribe", a)
+        self.assertIn("campaign=the-reef-401", b)
+
+    def test_whatsapp_message_names_the_venue(self) -> None:
+        at_shop = destination_of(self.client, "taxi", at="scuba-caribe")
+        self.assertIn(quote("I'm at Scuba Caribe"), at_shop)
+        # "Staying at" reads right for an apartment and wrong for a shop.
+        at_apto = destination_of(self.client, "taxi", at="the-reef-401")
+        self.assertIn(quote("I'm staying at Apto Reef"), at_apto)
+
+    def test_whatsapp_message_follows_the_language(self) -> None:
+        self.assertIn(quote("Quisiera info sobre"), destination_of(self.client, "taxi", at="scuba-caribe", lang="es"))
+        self.assertIn(quote("Je voudrais"), destination_of(self.client, "taxi", at="scuba-caribe", lang="fr"))
+
+    # ---- counting ----------------------------------------------------------
+
+    def test_a_page_view_counts_as_a_scan_for_that_location(self) -> None:
+        self.client.get("/scuba-caribe/")
+        event = LocationEvent.objects.get()
+        self.assertEqual(event.kind, LocationEvent.Kind.SCAN)
+        self.assertEqual(event.location, self.dive_shop)
+
+    def test_a_click_is_counted_against_the_location_and_service(self) -> None:
+        destination_of(self.client, "saona", at="scuba-caribe")
+        event = LocationEvent.objects.get(kind=LocationEvent.Kind.CLICK)
+        self.assertEqual(event.location, self.dive_shop)
+        self.assertEqual(event.service, self.saona)
+        self.assertEqual(event.channel, "viator")
+
+    def test_a_whatsapp_click_records_the_whatsapp_channel(self) -> None:
+        destination_of(self.client, "saona", at="scuba-caribe", ch="wa")
+        self.assertEqual(LocationEvent.objects.get(kind=LocationEvent.Kind.CLICK).channel, "whatsapp")
+
+    def test_clicks_without_a_location_are_still_counted(self) -> None:
+        destination_of(self.client, "taxi")
+        self.assertIsNone(LocationEvent.objects.get(kind=LocationEvent.Kind.CLICK).location)
+
+    def test_events_hold_nothing_that_identifies_a_visitor(self) -> None:
+        self.client.get("/scuba-caribe/", HTTP_USER_AGENT="Mozilla/5.0", REMOTE_ADDR="203.0.113.9")
+        fields = {f.name for f in LocationEvent._meta.get_fields()}
+        self.assertEqual(fields & {"ip", "ip_address", "user_agent", "session_key"}, set())
+
+    def test_the_page_links_through_the_counter_carrying_the_location(self) -> None:
+        html = self.client.get("/scuba-caribe/").content.decode()
+        self.assertIn("/go/saona/?at=scuba-caribe", html.replace("&amp;", "&"))
+
+
+class PrivacyPolicyAccuracyTests(TestCase):
+    """The policy has to describe what the site actually does."""
+
+    @override_settings(ALLOWED_HOSTS=["testserver"])
+    def test_it_discloses_the_scan_and_click_counting(self) -> None:
+        html = self.client.get("/privacy/").content.decode()
+        self.assertIn("count", html.lower())
+        self.assertIn("QR code", html)
+        # The old copy claimed no automatic collection at all — now untrue.
+        self.assertNotIn("Nothing is collected from you automatically", html)
+        # And it must still be honest about what is NOT stored.
+        self.assertIn("no IP address", html)

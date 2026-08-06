@@ -14,20 +14,19 @@ urlpatterns = [
     path("ticket/<str:short_code>/", concierge_views.ticket_thread, name="ticket_thread"),
     path("privacy/", concierge_views.privacy, name="privacy"),
     path("healthz/", concierge_views.healthz, name="healthz"),
+    path("go/<slug:service_slug>/", concierge_views.go, name="go"),
 ]
 
-# The QR cards already printed for the apartment encode
-# /the-reef-401, not /. Route it to the same landing page so those
-# cards keep working; guests who type the bare domain land in the same place.
-if settings.APARTMENT_SLUG:
-    urlpatterns.append(
-        path(f"{settings.APARTMENT_SLUG}/", concierge_views.landing, name="landing_apartment"),
-    )
-    # Without the trailing slash Django's APPEND_SLASH would 301 first; the QR
-    # payload has no trailing slash, so serve it directly and skip the redirect.
-    urlpatterns.append(
-        path(settings.APARTMENT_SLUG, concierge_views.landing, name="landing_apartment_noslash"),
-    )
+# Every QR code points at /<location-slug>. These come last so the fixed routes
+# above always win, and an unknown slug 404s in the landing view.
+#
+# Both forms are registered because printed QR payloads have no trailing slash,
+# and APPEND_SLASH would otherwise 301 before the page renders — a redirect the
+# guest pays for on mobile data.
+urlpatterns += [
+    path("<slug:slug>/", concierge_views.landing, name="landing_location"),
+    path("<slug:slug>", concierge_views.landing, name="landing_location_noslash"),
+]
 
 # Uploaded service images. WhiteNoise only covers collected *static* files, and
 # on cPanel/Passenger you cannot rely on Apache picking up /media/ itself — so

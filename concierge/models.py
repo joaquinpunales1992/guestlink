@@ -122,6 +122,101 @@ class Service(models.Model):
         return self.name_fr or self.name_en
 
 
+class Location(models.Model):
+    """A place a QR code is displayed — a restaurant, dive shop, apartment, lobby.
+
+    Each has its own landing URL, its own menu of services, and its own Viator
+    campaign code, so bookings and traffic can be attributed to the venue that
+    produced them.
+    """
+
+    class Kind(models.TextChoices):
+        APARTMENT = "apartment", "Holiday apartment"
+        HOTEL = "hotel", "Hotel"
+        RESIDENCE = "residence", "Residential building"
+        RESTAURANT = "restaurant", "Restaurant / bar"
+        DIVE_SHOP = "dive_shop", "Dive shop"
+        SUPERMARKET = "supermarket", "Supermarket / shop"
+        OTHER = "other", "Other"
+
+    name = models.CharField(max_length=120, help_text="Shown to guests, e.g. “Restaurante La Bahía”.")
+    slug = models.SlugField(
+        unique=True,
+        help_text="The QR address: bookyourtickets.online/<slug>. Changing it orphans printed codes.",
+    )
+    kind = models.CharField(max_length=20, choices=Kind.choices, default=Kind.OTHER)
+    services = models.ManyToManyField(
+        Service,
+        blank=True,
+        related_name="locations",
+        help_text=(
+            "Which services this venue shows. Leave empty to show all active ones. "
+            "Use it to avoid advertising a venue's own competitors."
+        ),
+    )
+    campaign_code = models.SlugField(
+        max_length=60,
+        blank=True,
+        help_text=(
+            "Viator campaign for this venue — defaults to the slug. Letters, numbers "
+            "and dashes only; anything else breaks Viator's attribution."
+        ),
+    )
+    contact_name = models.CharField(max_length=120, blank=True)
+    notes = models.TextField(blank=True, help_text="Internal — revenue share agreed, who to invoice, etc.")
+    active = models.BooleanField(default=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ("name",)
+
+    def __str__(self) -> str:
+        return self.name
+
+    @property
+    def viator_campaign(self) -> str:
+        """Campaign code sent to Viator; the slug is a sensible default."""
+        return self.campaign_code or self.slug
+
+    def visible_services(self):
+        """Active services for this venue — all of them when none are chosen."""
+        chosen = self.services.filter(active=True)
+        return chosen if chosen.exists() else Service.objects.filter(active=True)
+
+
+class LocationEvent(models.Model):
+    """A QR scan or an outbound click, counted per location.
+
+    Deliberately holds no IP address, user agent, or anything else identifying
+    a visitor — these are counters for attribution and revenue share, not
+    analytics about people.
+    """
+
+    class Kind(models.TextChoices):
+        SCAN = "scan", "Scan (landing page opened)"
+        CLICK = "click", "Click (guest followed a service)"
+
+    location = models.ForeignKey(
+        Location, on_delete=models.CASCADE, null=True, blank=True, related_name="events"
+    )
+    kind = models.CharField(max_length=10, choices=Kind.choices)
+    service = models.ForeignKey(
+        Service, on_delete=models.SET_NULL, null=True, blank=True, related_name="events"
+    )
+    # Copied rather than derived: the service's channel may change later, and
+    # historic counts should reflect where the guest was actually sent.
+    channel = models.CharField(max_length=20, blank=True)
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+
+    class Meta:
+        ordering = ("-created_at",)
+        indexes = [models.Index(fields=("location", "kind", "created_at"))]
+
+    def __str__(self) -> str:
+        where = self.location.name if self.location else "no location"
+        return f"{self.kind} @ {where} ({self.created_at:%Y-%m-%d %H:%M})"
+
+
 class Provider(models.Model):
     """A local provider we refer guests to (lanchero, taxista, restaurant, etc.)."""
 

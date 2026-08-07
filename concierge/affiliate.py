@@ -37,14 +37,42 @@ def is_viator(url: str) -> bool:
     return host == "viator.com" or host.endswith(".viator.com")
 
 
-def viator_url(url: str, *, pid: str, mcid: str = "", campaign: str = "") -> str:
-    """Return `url` with Viator affiliate parameters added where missing.
+# Viator puts the storefront locale in the first path segment — /es-PE/tours/…,
+# /fr/… — and copying a link out of a browser session carries whatever locale
+# that session was in. Left in place, every guest lands on that storefront
+# regardless of where they are: a Peruvian point of sale, in Spanish, for a
+# guest in the Dominican Republic.
+LOCALE_SEGMENT_RE = re.compile(r"^[a-z]{2}(-[A-Za-z]{2})?$")
 
-    Returns the URL unchanged when there is no `pid` configured, when it isn't
-    a viator.com link, or when tracking is already present.
+
+def strip_locale(url: str) -> str:
+    """Drop a leading storefront-locale segment so Viator picks per visitor.
+
+    Only the first segment, and only when it looks like a locale code — real
+    path segments (`tours`, `searchResults`, city names) do not.
     """
+    if not url or not is_viator(url):
+        return url
+    parsed = urlparse(url)
+    segments = parsed.path.split("/")
+    # ["", "es-PE", "tours", ...] — index 1 is the first real segment.
+    if len(segments) > 2 and LOCALE_SEGMENT_RE.match(segments[1]):
+        parsed = parsed._replace(path="/" + "/".join(segments[2:]))
+    return urlunparse(parsed)
+
+
+def viator_url(url: str, *, pid: str, mcid: str = "", campaign: str = "") -> str:
+    """Return `url` normalised, with affiliate parameters added where missing.
+
+    The locale is stripped whether or not a `pid` is configured; parameters are
+    only added when there is one. Existing tracking is never touched.
+    """
+    if not url or not is_viator(url):
+        return url
+
+    url = strip_locale(url)
     pid = (pid or "").strip()
-    if not pid or not url or not is_viator(url):
+    if not pid:
         return url
 
     parsed = urlparse(url)

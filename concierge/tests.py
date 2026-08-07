@@ -12,6 +12,8 @@ from urllib.parse import parse_qsl, quote, urlparse
 from unittest.mock import Mock, patch
 
 import qrcode
+from decimal import Decimal
+
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
@@ -21,6 +23,7 @@ from concierge import qr
 from concierge.affiliate import is_viator, viator_url
 from concierge.classifier import Classification
 from concierge.models import (
+    Commission,
     Guest,
     Location,
     LocationEvent,
@@ -37,7 +40,7 @@ from concierge.referral_preview import (
     og_value,
     points_at_a_listing,
 )
-from concierge.relay import CODE_RE, _strip_code, handle_inbound, normalize_phone
+from concierge.relay import CODE_RE, _strip_code, detect_location, handle_inbound, normalize_phone
 from concierge.translate import TranslationError, fill_missing_names, translate
 from concierge.whatsapp import WhatsAppError
 
@@ -1113,3 +1116,184 @@ class LocationBrandingTests(TestCase):
         apto = Location.objects.filter(slug="the-reef-401").first()
         self.assertIsNotNone(apto)
         self.assertTrue(apto.headline_en, "the apartment should carry its own headline")
+
+
+class CommissionTests(TestCase):
+    """Two sides of one event: what you collect, and what you owe the venue."""
+
+    def setUp(self) -> None:
+        self.venue = Location.objects.create(
+            name="Restaurante La Bahía", slug="la-bahia", commission_share_pct=Decimal("20")
+        )
+        self.service = Service.objects.create(slug="saona", name_en="Saona")
+
+    def _commission(self, **kw):
+        return Commission.objects.create(
+            **{
+                "location": self.venue,
+                "service": self.service,
+                "channel": Service.Channel.VIATOR,
+                "gross_usd": Decimal("50.00"),
+                **kw,
+            }
+        )
+
+    def test_the_venue_share_is_taken_from_the_location(self) -> None:
+        c = self._commission()
+        self.assertEqual(c.venue_share_pct, Decimal("20"))
+        self.assertEqual(c.venue_share_usd, Decimal("10.00"))
+        self.assertEqual(c.net_usd, Decimal("40.00"))
+        self.assertEqual(c.payout_status, Commission.Payout.OWED)
+
+    def test_the_share_is_a_snapshot_not_a_live_lookup(self) -> None:
+        # Renegotiating a venue's cut must not rewrite what is already owed.
+        c = self._commission()
+        Location.objects.filter(pk=self.venue.pk).update(commission_share_pct=Decimal("50"))
+        c.refresh_from_db()
+        self.assertEqual(c.venue_share_usd, Decimal("10.00"))
+
+    def test_rounding_is_to_the_cent(self) -> None:
+        c = self._commission(gross_usd=Decimal("33.33"), venue_share_pct=Decimal("33.33"))
+        self.assertEqual(c.venue_share_usd, Decimal("11.11"))
+
+    def test_no_share_means_nothing_to_pay(self) -> None:
+        free = Location.objects.create(name="Own apartment", slug="own", commission_share_pct=0)
+        c = self._commission(location=free)
+        self.assertEqual(c.venue_share_usd, Decimal("0.00"))
+        self.assertEqual(c.payout_status, Commission.Payout.NONE)
+        self.assertEqual(c.net_usd, c.gross_usd)
+
+    def test_editing_the_percentage_recalculates_the_amount(self) -> None:
+        c = self._commission()
+        c.venue_share_pct = Decimal("10")
+        c.save()
+        self.assertEqual(c.venue_share_usd, Decimal("5.00"))
+
+    def test_a_commission_can_have_no_venue(self) -> None:
+        c = self._commission(location=None)
+        self.assertEqual(c.venue_share_usd, Decimal("0.00"))
+        self.assertEqual(c.payout_status, Commission.Payout.NONE)
+
+
+@override_settings(WHATSAPP_DRY_RUN=True, ANTHROPIC_API_KEY="")
+class WhatsAppCommissionTests(TestCase):
+    """WhatsApp is the channel nobody reports for you — it must be claimable."""
+
+    def setUp(self) -> None:
+        self.provider = Provider.objects.create(name="María (Saona)", phone="+18091111111")
+        self.service = Service.objects.create(
+            slug="saona", name_en="Saona Island excursion", name_es="Excursión Isla Saona",
+            keywords="saona", default_provider=self.provider, expected_commission_usd=Decimal("15.00"),
+        )
+        self.venue = Location.objects.create(
+            name="Restaurante La Bahía", slug="la-bahia", commission_share_pct=Decimal("25")
+        )
+
+    def test_the_ticket_records_which_venue_sent_the_guest(self) -> None:
+        # The QR pre-fills "I'm at <venue>", so the name arrives in the message.
+        outcome = handle_inbound(
+            from_phone="+4915112345678",
+            body="Hi! I'm at Restaurante La Bahía. I'd like info about Saona.",
+        )
+        self.assertEqual(outcome.ticket.location, self.venue)
+
+    def test_a_guest_typing_their_own_message_leaves_the_venue_unknown(self) -> None:
+        outcome = handle_inbound(from_phone="+4915112345678", body="hola quiero ir a saona")
+        self.assertIsNone(outcome.ticket.location)
+
+    def test_the_longest_matching_venue_name_wins(self) -> None:
+        Location.objects.create(name="Bahía", slug="bahia")
+        self.assertEqual(
+            detect_location("I'm at Restaurante La Bahía today"), self.venue
+        )
+
+    def test_recording_a_claim_from_a_ticket_carries_venue_and_provider(self) -> None:
+        from django.contrib.admin.sites import site as admin_site
+
+        outcome = handle_inbound(
+            from_phone="+4915112345678",
+            body="Hi! I'm at Restaurante La Bahía. I'd like info about Saona.",
+        )
+        model_admin = admin_site._registry[Ticket]
+        request = RequestFactory().post("/admin/")
+        with patch.object(type(model_admin), "message_user"):
+            model_admin.record_commission(request, Ticket.objects.filter(pk=outcome.ticket.pk))
+
+        c = Commission.objects.get()
+        self.assertEqual(c.channel, Service.Channel.WHATSAPP)
+        self.assertEqual(c.provider, self.provider)       # who to claim from
+        self.assertEqual(c.location, self.venue)          # who to pay
+        self.assertEqual(c.gross_usd, Decimal("15.00"))
+        self.assertEqual(c.venue_share_usd, Decimal("3.75"))
+        self.assertEqual(c.reference, outcome.ticket.short_code)
+        self.assertEqual(c.status, Commission.Status.PENDING)
+
+    def test_recording_twice_does_not_double_count(self) -> None:
+        from django.contrib.admin.sites import site as admin_site
+
+        outcome = handle_inbound(from_phone="+4915112345678", body="Saona please")
+        model_admin = admin_site._registry[Ticket]
+        request = RequestFactory().post("/admin/")
+        qs = Ticket.objects.filter(pk=outcome.ticket.pk)
+        with patch.object(type(model_admin), "message_user"):
+            model_admin.record_commission(request, qs)
+            model_admin.record_commission(request, qs)
+        self.assertEqual(Commission.objects.count(), 1)
+
+
+PLAIN_STATIC = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+}
+
+
+@override_settings(STORAGES=PLAIN_STATIC)
+class CommissionSummaryTests(TestCase):
+    """The admin has to answer: what do I collect, and what do I owe?
+
+    Rendering the real admin page rather than calling the aggregate directly:
+    the totals are only useful if they survive the template.
+    """
+
+    def setUp(self) -> None:
+        self.venue = Location.objects.create(
+            name="La Bahía", slug="la-bahia", commission_share_pct=Decimal("20")
+        )
+        User = get_user_model()
+        self.staff = User.objects.create_superuser("boss", "b@example.com", "pw")
+
+    def _c(self, gross, status=Commission.Status.PENDING, payout=None):
+        c = Commission.objects.create(
+            location=self.venue, channel=Service.Channel.VIATOR,
+            gross_usd=Decimal(gross), status=status,
+        )
+        if payout:
+            Commission.objects.filter(pk=c.pk).update(payout_status=payout)
+        return c
+
+    @override_settings(ALLOWED_HOSTS=["testserver"])
+    def test_the_totals_answer_both_questions(self) -> None:
+        self._c("100")                                                  # to collect
+        self._c("50", status=Commission.Status.CLAIMED)                 # to collect
+        self._c("40", status=Commission.Status.RECEIVED)                # received
+        self._c("10", status=Commission.Status.WRITTEN_OFF)             # neither
+
+        self.client.force_login(self.staff)
+        summary = self.client.get("/admin/concierge/commission/").context["summary"]
+        self.assertEqual(summary["to_collect"], Decimal("150.00"))
+        self.assertEqual(summary["to_collect_count"], 2)
+        self.assertEqual(summary["received"], Decimal("40.00"))
+        self.assertEqual(summary["owed_to_venues"], Decimal("40.00"))   # 20% of 200
+        self.assertEqual(summary["net_kept"], Decimal("32.00"))         # 40 - 20%
+
+    @override_settings(ALLOWED_HOSTS=["testserver"])
+    def test_totals_follow_the_filters(self) -> None:
+        other = Location.objects.create(name="Other", slug="other", commission_share_pct=Decimal("50"))
+        self._c("100")
+        Commission.objects.create(location=other, channel=Service.Channel.VIATOR, gross_usd=Decimal("80"))
+
+        self.client.force_login(self.staff)
+        url = f"/admin/concierge/commission/?location__id__exact={self.venue.pk}"
+        summary = self.client.get(url).context["summary"]
+        self.assertEqual(summary["to_collect"], Decimal("100.00"))
+        self.assertEqual(summary["owed_to_venues"], Decimal("20.00"))

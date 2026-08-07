@@ -1,0 +1,26 @@
+{% extends "admin/change_list.html" %}
+
+{# The three questions this page exists to answer, above the rows. Filters
+   apply to them, so "what do I owe La Bahía in July" is a filter away. #}
+{% block result_list %}
+  {% if summary %}
+    <div style="display:flex;gap:12px;flex-wrap:wrap;margin:0 0 14px">
+      <div style="flex:1;min-width:190px;padding:12px 14px;border:1px solid var(--hairline-color,#e0e0e0);border-radius:6px;background:var(--darkened-bg,#f8f8f8)">
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;opacity:.7">To collect</div>
+        <div style="font-size:22px;font-weight:600">${{ summary.to_collect|floatformat:2 }}</div>
+        <div style="font-size:12px;opacity:.7">{{ summary.to_collect_count }} not yet received</div>
+      </div>
+      <div style="flex:1;min-width:190px;padding:12px 14px;border:1px solid var(--hairline-color,#e0e0e0);border-radius:6px;background:var(--darkened-bg,#f8f8f8)">
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;opacity:.7">Owed to venues</div>
+        <div style="font-size:22px;font-weight:600">${{ summary.owed_to_venues|floatformat:2 }}</div>
+        <div style="font-size:12px;opacity:.7">${{ summary.paid_to_venues|floatformat:2 }} already paid</div>
+      </div>
+      <div style="flex:1;min-width:190px;padding:12px 14px;border:1px solid var(--hairline-color,#e0e0e0);border-radius:6px;background:var(--darkened-bg,#f8f8f8)">
+        <div style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;opacity:.7">Received</div>
+        <div style="font-size:22px;font-weight:600">${{ summary.received|floatformat:2 }}</div>
+        <div style="font-size:12px;opacity:.7">${{ summary.net_kept|floatformat:2 }} kept after venue shares</div>
+      </div>
+    </div>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}

@@ -25,7 +25,7 @@ from django.db.models import Max
 from django.utils import timezone
 
 from .classifier import classify
-from .models import Guest, Message, Provider, Service, Ticket, normalize_phone
+from .models import Guest, Location, Message, Provider, Service, Ticket, normalize_phone
 from .whatsapp import send_text
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,20 @@ class RelayOutcome:
     # webhook still returns 200 (Meta must not retry), so this is how the
     # caller learns delivery broke.
     delivery_failed: bool = False
+
+
+def detect_location(body: str) -> Location | None:
+    """Work out which venue's QR started this conversation.
+
+    The landing page pre-fills "I'm at <venue>", so the venue's name is usually
+    sitting in the guest's first message. Longest name first, so "Hotel Bahía
+    Príncipe" is not mistaken for "Bahía" when both exist.
+    """
+    lowered = (body or "").lower()
+    candidates = [
+        loc for loc in Location.objects.filter(active=True) if loc.name and loc.name.lower() in lowered
+    ]
+    return max(candidates, key=lambda loc: len(loc.name), default=None)
 
 
 def _strip_code(body: str) -> str:
@@ -297,6 +311,7 @@ def _handle_guest_message(
         guest=guest,
         provider=service.default_provider,
         service=service,
+        location=detect_location(body),
         short_code=Ticket.new_short_code(),
         status=Ticket.Status.OPEN,
         raw_first_message=body,

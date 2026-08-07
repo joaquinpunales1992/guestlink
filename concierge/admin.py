@@ -1,13 +1,24 @@
 import datetime
+import decimal
 
 from django.conf import settings
 from django.contrib import admin, messages
-from django.db.models import Count, Q
+from django.db.models import Count, Q, Sum
 from django.utils import timezone
 from django.urls import reverse
 from django.utils.html import format_html
 
-from .models import Guest, Location, LocationEvent, Message, Provider, Service, SiteSettings, Ticket
+from .models import (
+    Commission,
+    Guest,
+    Location,
+    LocationEvent,
+    Message,
+    Provider,
+    Service,
+    SiteSettings,
+    Ticket,
+)
 from .referral_preview import PreviewError, fetch_preview, points_at_a_listing
 from .translate import TranslationError, fill_missing_names
 
@@ -261,6 +272,80 @@ class LocationEventAdmin(admin.ModelAdmin):
         return False  # written by the site, never by hand
 
 
+@admin.register(Commission)
+class CommissionAdmin(admin.ModelAdmin):
+    list_display = (
+        "occurred_on", "channel", "location", "service", "owed_by",
+        "gross_usd", "status", "venue_share", "payout_status",
+    )
+    list_filter = ("status", "payout_status", "channel", "location")
+    search_fields = ("reference", "notes", "location__name", "provider__name")
+    date_hierarchy = "occurred_on"
+    autocomplete_fields = ()
+    readonly_fields = ("venue_share_usd", "created_at")
+    actions = ["mark_claimed", "mark_received", "mark_venue_paid"]
+
+    @admin.display(description="owed by")
+    def owed_by(self, obj: Commission) -> str:
+        """Who you collect from — the whole point of the WhatsApp column."""
+        if obj.channel == Service.Channel.WHATSAPP:
+            return obj.provider.name if obj.provider else "— (no provider set)"
+        return obj.get_channel_display().split(" — ")[0]
+
+    @admin.display(description="venue share")
+    def venue_share(self, obj: Commission) -> str:
+        if obj.venue_share_usd <= 0:
+            return "—"
+        return f"${obj.venue_share_usd} ({obj.venue_share_pct:g}%)"
+
+    def changelist_view(self, request, extra_context=None):
+        """Put the three numbers that matter at the top of the list.
+
+        The filters apply, so "what do I owe La Bahía this month" is a filter
+        away rather than a spreadsheet export.
+        """
+        response = super().changelist_view(request, extra_context)
+        try:
+            qs = response.context_data["cl"].queryset
+        except (AttributeError, KeyError):
+            return response
+
+        def total(queryset, field):
+            # SQLite returns SUM(decimal) with float artefacts (21.6000000000000);
+            # quantize so the figures are exact money, not just rounded on screen.
+            value = queryset.aggregate(t=Sum(field))["t"] or decimal.Decimal("0")
+            return decimal.Decimal(value).quantize(decimal.Decimal("0.01"))
+
+        outstanding = qs.exclude(status__in=[Commission.Status.RECEIVED, Commission.Status.WRITTEN_OFF])
+        received = qs.filter(status=Commission.Status.RECEIVED)
+        response.context_data["summary"] = {
+            "to_collect": total(outstanding, "gross_usd"),
+            "to_collect_count": outstanding.count(),
+            "received": total(received, "gross_usd"),
+            "owed_to_venues": total(qs.filter(payout_status=Commission.Payout.OWED), "venue_share_usd"),
+            "paid_to_venues": total(qs.filter(payout_status=Commission.Payout.PAID), "venue_share_usd"),
+            "net_kept": total(received, "gross_usd") - total(received, "venue_share_usd"),
+        }
+        return response
+
+    @admin.action(description="Mark as claimed / invoiced")
+    def mark_claimed(self, request, queryset):
+        n = queryset.exclude(status=Commission.Status.RECEIVED).update(status=Commission.Status.CLAIMED)
+        self.message_user(request, f"{n} commission(s) marked as claimed.")
+
+    @admin.action(description="Mark as received")
+    def mark_received(self, request, queryset):
+        n = queryset.update(status=Commission.Status.RECEIVED)
+        self.message_user(request, f"{n} commission(s) marked as received.")
+
+    @admin.action(description="Mark the venue's share as paid")
+    def mark_venue_paid(self, request, queryset):
+        n = queryset.filter(payout_status=Commission.Payout.OWED).update(
+            payout_status=Commission.Payout.PAID
+        )
+        self.message_user(request, f"{n} venue payout(s) marked as paid.")
+
+
 @admin.register(Provider)
 class ProviderAdmin(admin.ModelAdmin):
     list_display = ("name", "phone", "active", "created_at")
@@ -287,12 +372,53 @@ class MessageInline(admin.TabularInline):
 
 @admin.register(Ticket)
 class TicketAdmin(admin.ModelAdmin):
-    list_display = ("short_code", "guest", "service", "provider", "status", "expected_commission_usd", "created_at", "thread_link")
-    list_filter = ("status", "service", "provider")
+    list_display = (
+        "short_code", "guest", "service", "provider", "location", "status",
+        "expected_commission_usd", "commission_recorded", "created_at", "thread_link",
+    )
+    list_filter = ("status", "service", "provider", "location")
     search_fields = ("short_code", "guest__phone", "guest__name", "notes")
     readonly_fields = ("short_code", "created_at", "raw_first_message", "extracted_fields", "thread_link")
     inlines = [MessageInline]
-    actions = ["mark_completed", "mark_no_show", "mark_cancelled"]
+    actions = ["record_commission", "mark_completed", "mark_no_show", "mark_cancelled"]
+
+    @admin.display(description="commission", boolean=True)
+    def commission_recorded(self, obj: Ticket) -> bool:
+        return obj.commissions.exists()
+
+    @admin.action(description="Record the commission to claim from the provider")
+    def record_commission(self, request, queryset):
+        """Open a claim for each ticket, so WhatsApp referrals are chased too.
+
+        Airbnb and Viator report their own commissions; a lanchero does not,
+        which is exactly why these need recording by hand.
+        """
+        created = skipped = 0
+        for ticket in queryset.select_related("service", "provider", "location"):
+            if ticket.commissions.exists():
+                skipped += 1
+                continue
+            Commission.objects.create(
+                occurred_on=ticket.created_at.date(),
+                location=ticket.location,
+                service=ticket.service,
+                channel=Service.Channel.WHATSAPP,
+                provider=ticket.provider,
+                ticket=ticket,
+                gross_usd=ticket.expected_commission_usd,
+                reference=ticket.short_code,
+            )
+            created += 1
+        if created:
+            self.message_user(
+                request,
+                f"{created} commission(s) recorded as expected. "
+                "Amounts come from the service's expected commission — edit any that differed.",
+            )
+        if skipped:
+            self.message_user(
+                request, f"{skipped} ticket(s) already had a commission.", level=messages.WARNING
+            )
 
     @admin.display(description="Chat view")
     def thread_link(self, obj: Ticket) -> str:

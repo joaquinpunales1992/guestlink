@@ -1,9 +1,11 @@
 """Core models for guestlink concierge relay."""
 
+import datetime
+import decimal
 import re
 import secrets
 
-from django.core.validators import RegexValidator
+from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
 from django.utils import timezone
 
@@ -178,6 +180,17 @@ class Location(models.Model):
     tagline_fr = models.CharField(max_length=240, blank=True)
     footer_text = models.CharField(max_length=200, blank=True)
 
+    commission_share_pct = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text=(
+            "This venue's cut, as a percentage of the commission you receive — not of "
+            "the booking price. 20 means you keep 80%. Changing it only affects "
+            "commissions recorded from now on."
+        ),
+    )
     contact_name = models.CharField(max_length=120, blank=True)
     notes = models.TextField(blank=True, help_text="Internal — revenue share agreed, who to invoice, etc.")
     active = models.BooleanField(default=True)
@@ -247,6 +260,104 @@ class LocationEvent(models.Model):
         return f"{self.kind} @ {where} ({self.created_at:%Y-%m-%d %H:%M})"
 
 
+class Commission(models.Model):
+    """One commission: what you earn on a booking, and what you owe the venue.
+
+    Both sides live on one row because they are two halves of the same event —
+    a Saona booking from the restaurant's QR earns you $15 and owes the
+    restaurant its share of that $15. Tracking them separately would let the
+    two drift apart.
+
+    Amounts are the commission itself, never the booking price, and always in
+    USD.
+    """
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Expected — not claimed yet"
+        CLAIMED = "claimed", "Claimed / invoiced"
+        RECEIVED = "received", "Received"
+        WRITTEN_OFF = "written_off", "Written off"
+
+    class Payout(models.TextChoices):
+        NONE = "none", "No share due"
+        OWED = "owed", "Owed to the venue"
+        PAID = "paid", "Paid to the venue"
+
+    occurred_on = models.DateField(
+        default=datetime.date.today, help_text="Date of the booking this commission is for."
+    )
+    location = models.ForeignKey(
+        Location, on_delete=models.PROTECT, null=True, blank=True, related_name="commissions",
+        help_text="Which venue's QR produced it. Blank means it came from no particular venue.",
+    )
+    service = models.ForeignKey(
+        Service, on_delete=models.PROTECT, null=True, blank=True, related_name="commissions"
+    )
+    channel = models.CharField(
+        max_length=20,
+        choices=Service.Channel.choices,
+        help_text="Who owes you: the provider (WhatsApp), Airbnb, or Viator.",
+    )
+    provider = models.ForeignKey(
+        "Provider", on_delete=models.PROTECT, null=True, blank=True,
+        related_name="commissions",
+        help_text="For WhatsApp referrals: the provider you claim this from.",
+    )
+    ticket = models.ForeignKey(
+        "Ticket", on_delete=models.SET_NULL, null=True, blank=True, related_name="commissions"
+    )
+
+    gross_usd = models.DecimalField(
+        max_digits=10, decimal_places=2,
+        validators=[MinValueValidator(0)],
+        help_text="The commission you earn, in USD. Not the price the guest paid.",
+    )
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.PENDING)
+
+    # Snapshot, not a live lookup: renegotiating a venue's share must not
+    # silently rewrite what you already owe on past bookings.
+    venue_share_pct = models.DecimalField(max_digits=5, decimal_places=2, default=0)
+    venue_share_usd = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    payout_status = models.CharField(max_length=20, choices=Payout.choices, default=Payout.NONE)
+
+    reference = models.CharField(
+        max_length=120, blank=True, help_text="Booking or payout reference, for reconciling."
+    )
+    notes = models.TextField(blank=True)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ("-occurred_on", "-created_at")
+        indexes = [
+            models.Index(fields=("status", "occurred_on")),
+            models.Index(fields=("payout_status", "occurred_on")),
+            models.Index(fields=("location", "occurred_on")),
+        ]
+
+    def __str__(self) -> str:
+        where = self.location.name if self.location else "no venue"
+        return f"{self.get_channel_display()} · ${self.gross_usd} · {where} · {self.occurred_on}"
+
+    @property
+    def net_usd(self):
+        """What you keep once the venue is paid."""
+        return self.gross_usd - self.venue_share_usd
+
+    def save(self, *args, **kwargs):
+        # Default the share from the venue, then keep amount and status in step
+        # with it so a hand-edited percentage can't leave a stale figure behind.
+        if self.venue_share_pct == 0 and self.location_id and not self.pk:
+            self.venue_share_pct = self.location.commission_share_pct
+        self.venue_share_usd = (self.gross_usd * self.venue_share_pct / 100).quantize(
+            decimal.Decimal("0.01"), rounding=decimal.ROUND_HALF_UP
+        )
+        if self.venue_share_usd <= 0:
+            self.payout_status = self.Payout.NONE
+        elif self.payout_status == self.Payout.NONE:
+            self.payout_status = self.Payout.OWED
+        super().save(*args, **kwargs)
+
+
 class Provider(models.Model):
     """A local provider we refer guests to (lanchero, taxista, restaurant, etc.)."""
 
@@ -300,6 +411,11 @@ class Ticket(models.Model):
 
     guest = models.ForeignKey(Guest, on_delete=models.CASCADE, related_name="tickets")
     provider = models.ForeignKey(Provider, on_delete=models.PROTECT, related_name="tickets")
+    # Detected from the guest's first message, which the QR pre-fills with the
+    # venue's name. Blank when they typed their own opener instead.
+    location = models.ForeignKey(
+        Location, on_delete=models.SET_NULL, null=True, blank=True, related_name="tickets"
+    )
     service = models.ForeignKey(Service, on_delete=models.PROTECT, related_name="tickets")
     short_code = models.CharField(max_length=10, unique=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.OPEN)

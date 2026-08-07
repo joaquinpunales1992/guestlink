@@ -221,10 +221,11 @@ def privacy(request: HttpRequest) -> HttpResponse:
         request,
         "concierge/privacy.html",
         {
-            "host_name": settings.HOST_NAME,
+            # Deliberately no personal name: the policy speaks for the service,
+            # not for an individual.
             "business_number": (settings.WHATSAPP_BUSINESS_NUMBER or "").lstrip("+"),
             "contact_email": settings.PRIVACY_CONTACT_EMAIL,
-            "last_updated": "6 August 2026",
+            "last_updated": "7 August 2026",
         },
     )
 

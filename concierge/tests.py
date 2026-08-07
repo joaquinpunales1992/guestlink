@@ -15,6 +15,7 @@ from unittest.mock import Mock, patch
 import qrcode
 from decimal import Decimal
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
@@ -1335,3 +1336,23 @@ class QrDependencyTests(TestCase):
         Service.objects.create(slug="taxi", name_en="Taxi")
         with patch("concierge.qr._load", side_effect=qr.QrUnavailable("nope")):
             self.assertEqual(self.client.get("/").status_code, 200)
+
+
+@override_settings(ALLOWED_HOSTS=["testserver"], HOST_NAME="Joaquin")
+class PrivacyPolicyAnonymityTests(TestCase):
+    """The policy speaks for the service, not for a named individual."""
+
+    def test_no_personal_name_appears(self) -> None:
+        html = self.client.get("/privacy/").content.decode()
+        self.assertNotIn("Joaquin", html)
+        self.assertNotIn(settings.HOST_NAME, html)
+
+    def test_it_still_says_who_to_contact(self) -> None:
+        html = self.client.get("/privacy/").content.decode()
+        self.assertIn("For anything about this policy", html)
+        # A policy with no contact route is not a usable policy.
+        self.assertTrue("wa.me" in html or "mailto:" in html or "us directly" in html)
+
+    def test_the_relay_wording_still_reads_naturally(self) -> None:
+        html = self.client.get("/privacy/").content.decode()
+        self.assertIn("the provider replies to us, not to you directly", html)

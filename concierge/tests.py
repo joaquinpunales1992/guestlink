@@ -22,7 +22,7 @@ from django.core.files.base import ContentFile
 from django.test import RequestFactory, TestCase, override_settings
 
 from concierge import qr
-from concierge.affiliate import is_viator, strip_locale, viator_url
+from concierge.affiliate import is_viator, viator_url
 from concierge.classifier import Classification
 from concierge.models import (
     Commission,
@@ -1378,49 +1378,35 @@ class PrivacyPolicyAnonymityTests(TestCase):
         self.assertIn("the provider replies to us, not to you directly", html)
 
 
-class ViatorLocaleTests(TestCase):
-    """A link copied from a Spanish browser must not pin every guest to Peru."""
+class ViatorPathIsPreservedTests(TestCase):
+    """The path, locale segment included, must reach Viator untouched.
+
+    Stripping a leading /es-PE/ shipped briefly and broke every link: Viator
+    re-applied the visitor's locale and the English slug no longer resolved
+    under it, so product pages fell back to a destination listing.
+    """
 
     PID = "P00313645"
-    TOUR = "/tours/La-Romana/ATV-Horseback-Ride-adventure/d4176-238420P3"
+    LOCALISED = "https://www.viator.com/es-PE/tours/La-Romana/Saona-Island-Excursion/d4176-17571P10"
 
-    def test_the_locale_segment_is_dropped(self) -> None:
-        out = strip_locale(f"https://www.viator.com/es-PE{self.TOUR}")
-        self.assertEqual(out, f"https://www.viator.com{self.TOUR}")
+    def test_the_locale_segment_survives(self) -> None:
+        out = viator_url(self.LOCALISED, pid=self.PID)
+        self.assertIn("/es-PE/tours/La-Romana/Saona-Island-Excursion/d4176-17571P10", out)
 
-    def test_bare_language_codes_are_dropped_too(self) -> None:
-        self.assertEqual(
-            strip_locale(f"https://www.viator.com/fr{self.TOUR}"),
-            f"https://www.viator.com{self.TOUR}",
-        )
+    def test_the_product_slug_and_code_survive(self) -> None:
+        out = viator_url(self.LOCALISED, pid=self.PID)
+        self.assertIn("Saona-Island-Excursion", out)
+        self.assertIn("d4176-17571P10", out)
 
-    def test_a_url_with_no_locale_is_untouched(self) -> None:
-        url = f"https://www.viator.com{self.TOUR}"
-        self.assertEqual(strip_locale(url), url)
-
-    def test_real_path_segments_are_never_mistaken_for_a_locale(self) -> None:
-        for path in ("/tours/x/d1-2P3", "/searchResults/all", "/Bayahibe/d5021-ttd"):
-            url = f"https://www.viator.com{path}"
-            self.assertEqual(strip_locale(url), url, path)
-
-    def test_non_viator_urls_are_left_alone(self) -> None:
-        url = "https://example.com/es-PE/whatever"
-        self.assertEqual(strip_locale(url), url)
-
-    def test_query_and_fragment_survive(self) -> None:
-        out = strip_locale(f"https://www.viator.com/es-PE{self.TOUR}?m=1#reviews")
-        self.assertEqual(out, f"https://www.viator.com{self.TOUR}?m=1#reviews")
-
-    def test_the_full_link_is_normalised_and_tracked(self) -> None:
-        out = viator_url(f"https://www.viator.com/es-PE{self.TOUR}", pid=self.PID, campaign="la-bahia")
-        self.assertNotIn("/es-PE/", out)
+    def test_only_the_query_string_is_added_to(self) -> None:
+        out = viator_url(self.LOCALISED, pid=self.PID, campaign="la-bahia")
+        self.assertEqual(out.split("?")[0], self.LOCALISED)
         self.assertIn(f"pid={self.PID}", out)
         self.assertIn("campaign=la-bahia", out)
 
-    def test_the_locale_goes_even_without_a_pid_configured(self) -> None:
-        # Otherwise the guest experience depends on whether billing is set up.
-        out = viator_url(f"https://www.viator.com/es-PE{self.TOUR}", pid="")
-        self.assertEqual(out, f"https://www.viator.com{self.TOUR}")
+    def test_a_url_with_no_locale_is_equally_untouched(self) -> None:
+        plain = "https://www.viator.com/tours/La-Romana/Saona/d4176-17571P10"
+        self.assertEqual(viator_url(plain, pid=self.PID).split("?")[0], plain)
 
 
 class BlockedPreviewTests(TestCase):

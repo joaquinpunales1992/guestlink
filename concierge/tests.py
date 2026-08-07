@@ -7,6 +7,7 @@ messages are still persisted as Message rows, which is what we assert against.
 from __future__ import annotations
 
 import html as html_lib
+import importlib
 from io import BytesIO
 from urllib.parse import parse_qsl, quote, urlparse
 from unittest.mock import Mock, patch
@@ -1297,3 +1298,40 @@ class CommissionSummaryTests(TestCase):
         summary = self.client.get(url).context["summary"]
         self.assertEqual(summary["to_collect"], Decimal("100.00"))
         self.assertEqual(summary["owed_to_venues"], Decimal("20.00"))
+
+
+class QrDependencyTests(TestCase):
+    """A missing optional dependency must not take the whole site down."""
+
+    def test_the_module_imports_without_the_library(self) -> None:
+        # views.py imports this module, so an import-time dependency would stop
+        # Django booting at all — the guest-facing site down over an admin tool.
+        with patch.dict("sys.modules", {"qrcode": None, "qrcode.image.svg": None}):
+            importlib.reload(qr)
+            self.assertEqual(qr.BORDER, 4)
+
+    def test_the_hardcoded_level_still_matches_the_library(self) -> None:
+        self.assertEqual(qr.ERROR_CORRECTION, qrcode.constants.ERROR_CORRECT_Q)
+
+    def test_generating_without_the_library_raises_an_actionable_error(self) -> None:
+        with patch("concierge.qr._load", side_effect=qr.QrUnavailable("not installed: pip install")):
+            with self.assertRaises(qr.QrUnavailable) as ctx:
+                qr.png_bytes("https://example.com/x")
+        self.assertIn("pip install", str(ctx.exception))
+
+    @override_settings(ALLOWED_HOSTS=["testserver"])
+    def test_the_view_explains_itself_instead_of_500ing(self) -> None:
+        Location.objects.create(name="La Bahía", slug="la-bahia")
+        User = get_user_model()
+        staff = User.objects.create_user("s2", password="pw", is_staff=True)
+        self.client.force_login(staff)
+        with patch("concierge.qr._load", side_effect=qr.QrUnavailable("Run: pip install -r requirements.txt")):
+            resp = self.client.get("/qr/la-bahia.png")
+        self.assertEqual(resp.status_code, 503)
+        self.assertIn(b"pip install", resp.content)
+
+    @override_settings(ALLOWED_HOSTS=["testserver"])
+    def test_the_landing_page_is_unaffected(self) -> None:
+        Service.objects.create(slug="taxi", name_en="Taxi")
+        with patch("concierge.qr._load", side_effect=qr.QrUnavailable("nope")):
+            self.assertEqual(self.client.get("/").status_code, 200)

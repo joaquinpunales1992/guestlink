@@ -195,10 +195,14 @@ def location_qr(request: HttpRequest, slug: str, fmt: str) -> HttpResponse:
     location = get_object_or_404(Location, slug=slug)
     data = qr.payload(request, location)
 
-    if fmt == "svg":
-        body, content_type = qr.svg_bytes(data), "image/svg+xml"
-    else:
-        body, content_type = qr.png_bytes(data), "image/png"
+    try:
+        if fmt == "svg":
+            body, content_type = qr.svg_bytes(data), "image/svg+xml"
+        else:
+            body, content_type = qr.png_bytes(data), "image/png"
+    except qr.QrUnavailable as exc:
+        # A missing optional dependency should read as an instruction, not a 500.
+        return HttpResponse(str(exc), status=503, content_type="text/plain")
 
     response = HttpResponse(body, content_type=content_type)
     # inline so the admin can preview it; the download links add ?download=1

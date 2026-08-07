@@ -95,11 +95,11 @@ class ServiceAdmin(admin.ModelAdmin):
     def _fill_translations(self, request, service) -> None:
         """Translate the English name into any language left blank.
 
-        Silent when no API key is configured — the landing page falls back to
-        the English name, so a missing translation is a cosmetic gap, not an
-        error worth interrupting a save for.
+        A failure is a warning, never an error: the landing page falls back to
+        the English name, so a missing translation is a cosmetic gap and not
+        worth interrupting a save for.
         """
-        if not settings.ANTHROPIC_API_KEY:
+        if not getattr(settings, "TRANSLATE_SERVICE_NAMES", True):
             return
         try:
             filled = fill_missing_names(service)
@@ -116,7 +116,10 @@ class ServiceAdmin(admin.ModelAdmin):
                 **{f"name_{code}": getattr(service, f"name_{code}") for code in filled}
             )
             names = ", ".join(f"{c.upper()}: “{getattr(service, f'name_{c}')}”" for c in filled)
-            self.message_user(request, f"Translated the name — {names}. Edit if you'd word it differently.")
+            self.message_user(
+                request,
+                f"Translated the name — {names}. Machine translation, so check it reads well.",
+            )
 
     @admin.display(description="link set", boolean=True, ordering="referral_url")
     def has_referral(self, obj: Service) -> bool:

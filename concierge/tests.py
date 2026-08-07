@@ -453,6 +453,7 @@ class ReferralPreviewTests(TestCase):
         self.assertIn("larger than 8 MB", str(ctx.exception))
 
 
+@override_settings(TRANSLATE_SERVICE_NAMES=False)
 class ServiceAdminAutoPreviewTests(TestCase):
     """Saving a service with a referral link should pull its card image."""
 
@@ -505,6 +506,7 @@ class ServiceAdminAutoPreviewTests(TestCase):
         self.assertFalse(Service.objects.get(slug="saona").image)
 
 
+@override_settings(TRANSLATE_SERVICE_NAMES=False)
 class ReferralLinkShapeTests(TestCase):
     """A shared Airbnb *search* is a valid referral link that lands guests wrong."""
 
@@ -575,6 +577,7 @@ class ReferralUrlLengthTests(TestCase):
         self.assertFalse(points_at_a_listing(self.FULL[:200]))
 
 
+@override_settings(TRANSLATE_SERVICE_NAMES=False)
 class StaleCardImageTests(TestCase):
     """Changing the referral link must not leave the previous listing's photo.
 
@@ -622,73 +625,90 @@ class StaleCardImageTests(TestCase):
         self.assertIn("my-own-photo", s.image.name)
 
 
-@override_settings(ANTHROPIC_API_KEY="sk-test")
 class TranslationTests(TestCase):
-    """One English name in, Spanish and French filled in automatically."""
+    """Machine translation of service names, over MyMemory's free API."""
 
-    def _client_returning(self, payload):
-        # `name` is a reserved Mock constructor kwarg — it names the mock
-        # rather than setting the attribute, so assign it afterwards.
-        block = Mock(type="tool_use", input=payload)
-        block.name = "record_translations"
-        client = Mock()
-        client.messages.create.return_value = Mock(content=[block])
-        return client
+    def _reply(self, text, status=200):
+        return Mock(status_code=status, json=lambda: {"responseData": {"translatedText": text}})
 
-    def _patch(self, client):
-        module = Mock()
-        module.Anthropic.return_value = client
-        return patch.dict("sys.modules", {"anthropic": module})
-
-    def test_translate_returns_both_languages(self) -> None:
-        client = self._client_returning({"es": "Excursión a Isla Saona", "fr": "Excursion à Saona"})
-        with self._patch(client):
+    def test_each_target_language_is_requested(self) -> None:
+        with patch("concierge.translate.requests.get") as get:
+            get.side_effect = [self._reply("Excursión a la isla Saona"), self._reply("Excursion sur l'île")]
             out = translate("Saona Island excursion")
-        self.assertEqual(out, {"es": "Excursión a Isla Saona", "fr": "Excursion à Saona"})
-        kwargs = client.messages.create.call_args.kwargs
-        self.assertEqual(kwargs["model"], "claude-opus-5")
-        # Forced tool use, so the model cannot answer in prose.
-        self.assertEqual(kwargs["tool_choice"]["name"], "record_translations")
+        self.assertEqual(out["es"], "Excursión a la isla Saona")
+        self.assertEqual(out["fr"], "Excursion sur l'île")
+        pairs = [call.kwargs["params"]["langpair"] for call in get.call_args_list]
+        self.assertEqual(pairs, ["en|es", "en|fr"])
 
     def test_only_blank_languages_are_requested_and_filled(self) -> None:
         s = Service.objects.create(
             slug="saona", name_en="Saona Island excursion", name_es="Mi propia traducción"
         )
-        client = self._client_returning({"fr": "Excursion à Saona"})
-        with self._patch(client):
+        with patch("concierge.translate.requests.get") as get:
+            get.return_value = self._reply("Excursion sur l'île")
             filled = fill_missing_names(s)
         self.assertEqual(filled, ["fr"])
-        # The host's Spanish wording is untouched.
-        self.assertEqual(s.name_es, "Mi propia traducción")
-        self.assertEqual(s.name_fr, "Excursion à Saona")
-        self.assertEqual(set(client.messages.create.call_args.kwargs["tools"][0]["input_schema"]["properties"]), {"fr"})
+        self.assertEqual(s.name_es, "Mi propia traducción")  # the host's wording wins
+        self.assertEqual(get.call_count, 1)
 
-    def test_nothing_to_do_makes_no_api_call(self) -> None:
+    def test_nothing_to_do_makes_no_request(self) -> None:
         s = Service.objects.create(slug="s", name_en="Taxi", name_es="Taxi", name_fr="Taxi")
-        client = self._client_returning({})
-        with self._patch(client):
+        with patch("concierge.translate.requests.get") as get:
             self.assertEqual(fill_missing_names(s), [])
-        client.messages.create.assert_not_called()
+        get.assert_not_called()
 
-    def test_empty_translation_is_an_error_not_a_blank_name(self) -> None:
-        client = self._client_returning({"es": "  ", "fr": "Excursion"})
-        with self._patch(client):
+    def test_a_lower_cased_result_keeps_the_title_capitalised(self) -> None:
+        with patch("concierge.translate.requests.get") as get:
+            get.return_value = self._reply("excursión a la isla saona")
+            self.assertEqual(translate("Saona Island excursion", ("es",))["es"][0], "E")
+
+    def test_html_entities_are_decoded(self) -> None:
+        with patch("concierge.translate.requests.get") as get:
+            get.return_value = self._reply("Alquiler de coches &amp; motos")
+            self.assertEqual(translate("Car rental", ("es",))["es"], "Alquiler de coches & motos")
+
+    def test_an_exhausted_quota_is_reported_as_such(self) -> None:
+        # MyMemory returns this inside the text with HTTP 200, not as an error.
+        with patch("concierge.translate.requests.get") as get:
+            get.return_value = self._reply("MYMEMORY WARNING: YOU USED ALL AVAILABLE FREE TRANSLATIONS")
             with self.assertRaises(TranslationError) as ctx:
-                translate("Saona Island excursion")
-        self.assertIn("es", str(ctx.exception))
+                translate("Saona", ("es",))
+        self.assertIn("quota", str(ctx.exception))
 
-    @override_settings(ANTHROPIC_API_KEY="")
-    def test_without_an_api_key_it_raises_rather_than_guessing(self) -> None:
-        with self.assertRaises(TranslationError):
-            translate("Saona Island excursion")
+    def test_an_empty_translation_is_an_error_not_a_blank_name(self) -> None:
+        with patch("concierge.translate.requests.get") as get:
+            get.return_value = self._reply("")
+            with self.assertRaises(TranslationError):
+                translate("Saona", ("es",))
 
-    def test_api_failure_is_wrapped(self) -> None:
-        client = Mock()
-        client.messages.create.side_effect = RuntimeError("connection reset")
-        with self._patch(client):
+    def test_network_failure_is_wrapped(self) -> None:
+        import requests as _requests
+
+        with patch("concierge.translate.requests.get", side_effect=_requests.ConnectionError("down")):
             with self.assertRaises(TranslationError) as ctx:
-                translate("Saona")
-        self.assertIn("connection reset", str(ctx.exception))
+                translate("Saona", ("es",))
+        self.assertIn("could not reach", str(ctx.exception))
+
+    def test_http_error_is_wrapped(self) -> None:
+        with patch("concierge.translate.requests.get") as get:
+            get.return_value = self._reply("x", status=503)
+            with self.assertRaises(TranslationError) as ctx:
+                translate("Saona", ("es",))
+        self.assertIn("503", str(ctx.exception))
+
+    @override_settings(MYMEMORY_EMAIL="host@example.com")
+    def test_the_email_is_sent_when_configured_to_raise_the_quota(self) -> None:
+        with patch("concierge.translate.requests.get") as get:
+            get.return_value = self._reply("Taxi")
+            translate("Taxi", ("es",))
+        self.assertEqual(get.call_args.kwargs["params"]["de"], "host@example.com")
+
+    def test_no_api_key_is_required(self) -> None:
+        # The whole point of the swap: translation must not depend on an LLM key.
+        with override_settings(ANTHROPIC_API_KEY=""):
+            with patch("concierge.translate.requests.get") as get:
+                get.return_value = self._reply("Taxi")
+                self.assertEqual(translate("Taxi", ("es",)), {"es": "Taxi"})
 
 
 class MissingTranslationFallbackTests(TestCase):

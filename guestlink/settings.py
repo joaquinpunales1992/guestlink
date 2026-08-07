@@ -183,6 +183,14 @@ HOST_APARTMENT_LABEL = os.environ.get("HOST_APARTMENT_LABEL", "Reef")
 # at the WhatsApp business number, which is the channel they already use.
 PRIVACY_CONTACT_EMAIL = os.environ.get("PRIVACY_CONTACT_EMAIL", "").strip()
 
+# Fill blank Spanish/French service names by machine translation on save.
+# Set to 0 to enter every language by hand (and to keep saves offline).
+TRANSLATE_SERVICE_NAMES = _env_bool("TRANSLATE_SERVICE_NAMES", True)
+
+# Optional. MyMemory (used to translate service names) allows a larger free
+# daily character allowance to requests that identify themselves by email.
+MYMEMORY_EMAIL = os.environ.get("MYMEMORY_EMAIL", "").strip()
+
 # The path baked into the printed QR cards in print/ (payload:
 # https://bookyourtickets.online/the-reef-401). Serves the same landing page as
 # "/". Changing this orphans every card already hanging in the apartment.

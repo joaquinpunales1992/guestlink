@@ -1401,3 +1401,26 @@ class ViatorLocaleTests(TestCase):
         # Otherwise the guest experience depends on whether billing is set up.
         out = viator_url(f"https://www.viator.com/es-PE{self.TOUR}", pid="")
         self.assertEqual(out, f"https://www.viator.com{self.TOUR}")
+
+
+class BlockedPreviewTests(TestCase):
+    """Some sites refuse server-side fetches; say so plainly."""
+
+    URL = "https://www.viator.com/tours/La-Romana/ATV/d4176-238420P3"
+
+    def _fetch_with_status(self, status):
+        with patch("concierge.referral_preview.requests.get") as get:
+            get.return_value = Mock(status_code=status, text="<html>challenge</html>")
+            with self.assertRaises(PreviewError) as ctx:
+                fetch_preview(self.URL)
+        return str(ctx.exception)
+
+    def test_bot_protection_gets_an_actionable_message(self) -> None:
+        for status in (401, 403, 429):
+            message = self._fetch_with_status(status)
+            self.assertIn("blocks automated fetches", message)
+            self.assertIn("by hand", message)
+            self.assertIn("viator.com", message)
+
+    def test_other_failures_keep_the_plain_status(self) -> None:
+        self.assertIn("HTTP 500", self._fetch_with_status(500))

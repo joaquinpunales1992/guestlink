@@ -104,6 +104,14 @@ def fetch_preview(referral_url: str) -> Preview:
         page = requests.get(page_url, headers=headers, timeout=TIMEOUT)
     except requests.RequestException as exc:
         raise PreviewError(f"could not load {page_url} ({exc})") from exc
+    if page.status_code in (401, 403, 429):
+        # Viator sits behind bot protection and answers any server-side fetch
+        # with a challenge page. Nothing to fix in the URL — say so, rather than
+        # leaving the host to decode an HTTP code.
+        raise PreviewError(
+            f"{urlparse(page_url).netloc} blocks automated fetches (HTTP {page.status_code}), "
+            "so the image and title cannot be read from the page. Add them by hand."
+        )
     if page.status_code >= 300:
         raise PreviewError(f"{page_url} returned HTTP {page.status_code}")
 

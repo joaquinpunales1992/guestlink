@@ -160,8 +160,9 @@ class Location(models.Model):
         max_length=60,
         blank=True,
         help_text=(
-            "Viator campaign for this venue — defaults to the slug. Letters, numbers "
-            "and dashes only; anything else breaks Viator's attribution."
+            "Viator campaign for this venue. Leave blank unless you have checked "
+            "that a link carrying it still opens the tour rather than a listing — "
+            "extra parameters have broken Viator links on this account before."
         ),
     )
     # --- how this business presents itself -------------------------------
@@ -211,8 +212,14 @@ class Location(models.Model):
 
     @property
     def viator_campaign(self) -> str:
-        """Campaign code sent to Viator; the slug is a sensible default."""
-        return self.campaign_code or self.slug
+        """Campaign code sent to Viator — only when explicitly set.
+
+        It used to default to the slug, but every extra parameter on a Viator
+        link has to be verified against a live product page: an unchecked one
+        sends guests to a listing. Set it per venue once you have confirmed the
+        link still opens the tour.
+        """
+        return self.campaign_code
 
     def branding(self, site) -> dict:
         """This venue's page copy, filling any gap from the site defaults."""

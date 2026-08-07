@@ -811,18 +811,25 @@ class ViatorAffiliateUrlTests(TestCase):
     def _params(self, url):
         return dict(parse_qsl(urlparse(url).query))
 
-    def test_parameters_are_appended_to_a_plain_product_url(self) -> None:
+    def test_only_pid_is_sent_by_default(self) -> None:
+        # Everything beyond pid broke live product links on this account.
         out = viator_url(self.PLAIN, pid=self.PID)
-        self.assertEqual(self._params(out), {"pid": self.PID, "medium": "link"})
+        self.assertEqual(self._params(out), {"pid": self.PID})
         self.assertTrue(out.startswith(self.PLAIN + "?"))
 
-    def test_no_mcid_is_invented(self) -> None:
-        # Sending someone else's campaign id makes Viator serve a destination
-        # listing instead of the product — observed in production.
-        self.assertNotIn("mcid", viator_url(self.PLAIN, pid=self.PID))
+    def test_optional_parameters_are_sent_only_when_configured(self) -> None:
+        out = viator_url(self.PLAIN, pid=self.PID, mcid="99999", medium="link", campaign="la-bahia")
+        self.assertEqual(
+            self._params(out),
+            {"pid": self.PID, "mcid": "99999", "medium": "link", "campaign": "la-bahia"},
+        )
 
-    def test_a_real_mcid_is_used_when_configured(self) -> None:
-        self.assertEqual(self._params(viator_url(self.PLAIN, pid=self.PID, mcid="99999"))["mcid"], "99999")
+    def test_nothing_is_invented(self) -> None:
+        # Sending a borrowed mcid, or medium, made Viator serve a destination
+        # listing instead of the product — observed in production.
+        out = viator_url(self.PLAIN, pid=self.PID)
+        for param in ("mcid", "medium", "campaign"):
+            self.assertNotIn(f"{param}=", out)
 
     def test_existing_query_parameters_are_preserved(self) -> None:
         out = viator_url(self.PLAIN + "?m=1&sortType=rating", pid=self.PID)
@@ -957,20 +964,22 @@ class LocationTests(TestCase):
 
     # ---- attribution -------------------------------------------------------
 
-    def test_viator_campaign_defaults_to_the_location_slug(self) -> None:
+    def test_no_campaign_is_sent_unless_the_venue_has_one(self) -> None:
+        # A campaign parameter has to be verified against a live product page
+        # first; an unchecked one sends guests to a listing.
         dest = destination_of(self.client, "saona", at="scuba-caribe")
-        self.assertIn("campaign=scuba-caribe", dest)
         self.assertIn("pid=P00012345", dest)
+        self.assertNotIn("campaign=", dest)
 
     def test_an_explicit_campaign_code_overrides_the_slug(self) -> None:
         Location.objects.filter(slug="scuba-caribe").update(campaign_code="dive-partner-a")
         self.assertIn("campaign=dive-partner-a", destination_of(self.client, "saona", at="scuba-caribe"))
 
-    def test_two_locations_produce_different_campaigns_for_one_link(self) -> None:
-        a = destination_of(self.client, "saona", at="scuba-caribe")
-        b = destination_of(self.client, "saona", at="the-reef-401")
-        self.assertIn("campaign=scuba-caribe", a)
-        self.assertIn("campaign=the-reef-401", b)
+    def test_two_locations_produce_different_campaigns_once_set(self) -> None:
+        Location.objects.filter(slug="scuba-caribe").update(campaign_code="dive-shop")
+        Location.objects.filter(slug="the-reef-401").update(campaign_code="apto-reef")
+        self.assertIn("campaign=dive-shop", destination_of(self.client, "saona", at="scuba-caribe"))
+        self.assertIn("campaign=apto-reef", destination_of(self.client, "saona", at="the-reef-401"))
 
     def test_whatsapp_message_names_the_venue(self) -> None:
         at_shop = destination_of(self.client, "taxi", at="scuba-caribe")

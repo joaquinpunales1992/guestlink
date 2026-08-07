@@ -17,12 +17,17 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-# `mcid` is a Viator-internal campaign id. Their docs show it in examples
-# (42383, 12345), but those values belong to whoever wrote the example — sending
-# one that is not yours makes their router drop the product and serve the
-# destination listing instead, so the guest sees "multiple results" rather than
-# the tour they tapped. Omitted unless the host has a real one from Viator.
-DEFAULT_MEDIUM = "link"
+# Only `pid` is sent by default.
+#
+# Viator's documentation shows pid, mcid, medium and campaign together, but on
+# this account anything beyond `pid` made their router drop the product and
+# serve the destination listing instead — the guest saw "multiple results"
+# rather than the tour they tapped. Verified against live links one parameter
+# at a time: pid alone renders the product; pid+mcid and pid+medium do not.
+#
+# So every other parameter is opt-in, and only worth turning on once it has been
+# checked against a real link. An unverified tracking parameter costs a booking,
+# which is worse than the attribution it was meant to buy.
 
 # Viator: "only include alphanumeric characters and dashes — special characters
 # may break tracking and attribution entirely."
@@ -52,7 +57,7 @@ def is_viator(url: str) -> bool:
 # so the safe move is to add tracking and change nothing else.
 
 
-def viator_url(url: str, *, pid: str, mcid: str = "", campaign: str = "") -> str:
+def viator_url(url: str, *, pid: str, mcid: str = "", campaign: str = "", medium: str = "") -> str:
     """Return `url` with Viator affiliate parameters added where missing.
 
     Returns the URL unchanged when there is no `pid` configured, when it isn't
@@ -66,11 +71,10 @@ def viator_url(url: str, *, pid: str, mcid: str = "", campaign: str = "") -> str
     params = parse_qsl(parsed.query, keep_blank_values=True)
     present = {key.lower() for key, _ in params}
 
-    additions = {"pid": pid, "medium": DEFAULT_MEDIUM}
-    if (mcid or "").strip():
-        additions["mcid"] = mcid.strip()
-    if campaign.strip():
-        additions["campaign"] = campaign.strip()
+    additions = {"pid": pid}
+    for key, value in (("mcid", mcid), ("medium", medium), ("campaign", campaign)):
+        if (value or "").strip():
+            additions[key] = value.strip()
 
     for key, value in additions.items():
         if key not in present:

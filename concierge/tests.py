@@ -958,22 +958,28 @@ class LocationTests(TestCase):
 
     # ---- attribution -------------------------------------------------------
 
-    def test_no_campaign_is_sent_unless_the_venue_has_one(self) -> None:
-        # A campaign parameter has to be verified against a live product page
-        # first; an unchecked one sends guests to a listing.
+    def test_every_venue_gets_a_campaign_so_bookings_are_attributable(self) -> None:
+        # Revenue share is paid on bookings traced back to a venue, so a venue
+        # without its own campaign would be invisible in Viator's reporting.
         dest = destination_of(self.client, "saona", at="scuba-caribe")
         self.assertIn("pid=P00012345", dest)
-        self.assertNotIn("campaign=", dest)
+        self.assertIn("campaign=scuba-caribe", dest)
 
     def test_an_explicit_campaign_code_overrides_the_slug(self) -> None:
         Location.objects.filter(slug="scuba-caribe").update(campaign_code="dive-partner-a")
         self.assertIn("campaign=dive-partner-a", destination_of(self.client, "saona", at="scuba-caribe"))
 
-    def test_two_locations_produce_different_campaigns_once_set(self) -> None:
+    def test_two_venues_never_share_a_campaign(self) -> None:
+        # Two venues on one code would mean paying the wrong partner.
+        a = destination_of(self.client, "saona", at="scuba-caribe")
+        b = destination_of(self.client, "saona", at="the-reef-401")
+        self.assertIn("campaign=scuba-caribe", a)
+        self.assertIn("campaign=the-reef-401", b)
+        self.assertNotEqual(a, b)
+
+    def test_an_explicit_code_overrides_the_slug(self) -> None:
         Location.objects.filter(slug="scuba-caribe").update(campaign_code="dive-shop")
-        Location.objects.filter(slug="the-reef-401").update(campaign_code="apto-reef")
         self.assertIn("campaign=dive-shop", destination_of(self.client, "saona", at="scuba-caribe"))
-        self.assertIn("campaign=apto-reef", destination_of(self.client, "saona", at="the-reef-401"))
 
     def test_whatsapp_message_names_the_venue(self) -> None:
         at_shop = destination_of(self.client, "taxi", at="scuba-caribe")

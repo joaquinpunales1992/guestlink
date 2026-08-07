@@ -17,9 +17,11 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-# Viator's tracking id for the "link" medium, as used in their documented
-# examples. Configurable because it is theirs to change, not ours.
-DEFAULT_MCID = "42383"
+# `mcid` is a Viator-internal campaign id. Their docs show it in examples
+# (42383, 12345), but those values belong to whoever wrote the example — sending
+# one that is not yours makes their router drop the product and serve the
+# destination listing instead, so the guest sees "multiple results" rather than
+# the tour they tapped. Omitted unless the host has a real one from Viator.
 DEFAULT_MEDIUM = "link"
 
 # Viator: "only include alphanumeric characters and dashes — special characters
@@ -64,11 +66,9 @@ def viator_url(url: str, *, pid: str, mcid: str = "", campaign: str = "") -> str
     params = parse_qsl(parsed.query, keep_blank_values=True)
     present = {key.lower() for key, _ in params}
 
-    additions = {
-        "pid": pid,
-        "mcid": (mcid or "").strip() or DEFAULT_MCID,
-        "medium": DEFAULT_MEDIUM,
-    }
+    additions = {"pid": pid, "medium": DEFAULT_MEDIUM}
+    if (mcid or "").strip():
+        additions["mcid"] = mcid.strip()
     if campaign.strip():
         additions["campaign"] = campaign.strip()
 

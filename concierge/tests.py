@@ -813,10 +813,16 @@ class ViatorAffiliateUrlTests(TestCase):
 
     def test_parameters_are_appended_to_a_plain_product_url(self) -> None:
         out = viator_url(self.PLAIN, pid=self.PID)
-        self.assertEqual(
-            self._params(out), {"pid": self.PID, "mcid": "42383", "medium": "link"}
-        )
+        self.assertEqual(self._params(out), {"pid": self.PID, "medium": "link"})
         self.assertTrue(out.startswith(self.PLAIN + "?"))
+
+    def test_no_mcid_is_invented(self) -> None:
+        # Sending someone else's campaign id makes Viator serve a destination
+        # listing instead of the product — observed in production.
+        self.assertNotIn("mcid", viator_url(self.PLAIN, pid=self.PID))
+
+    def test_a_real_mcid_is_used_when_configured(self) -> None:
+        self.assertEqual(self._params(viator_url(self.PLAIN, pid=self.PID, mcid="99999"))["mcid"], "99999")
 
     def test_existing_query_parameters_are_preserved(self) -> None:
         out = viator_url(self.PLAIN + "?m=1&sortType=rating", pid=self.PID)
@@ -835,9 +841,6 @@ class ViatorAffiliateUrlTests(TestCase):
         self.assertNotIn("campaign", self._params(viator_url(self.PLAIN, pid=self.PID)))
         out = viator_url(self.PLAIN, pid=self.PID, campaign="apto-reef-qr")
         self.assertEqual(self._params(out)["campaign"], "apto-reef-qr")
-
-    def test_custom_mcid_overrides_the_default(self) -> None:
-        self.assertEqual(self._params(viator_url(self.PLAIN, pid=self.PID, mcid="99999"))["mcid"], "99999")
 
     def test_non_viator_and_unconfigured_urls_pass_through(self) -> None:
         airbnb = "https://es-l.airbnb.com/rp/x?listing_id=1"
@@ -872,7 +875,6 @@ class ViatorAffiliateRenderingTests(TestCase):
         self._html()
         dest = destination_of(self.client, "saona")
         self.assertIn("pid=P00012345", dest)
-        self.assertIn("mcid=42383", dest)
         self.assertIn("campaign=apto-reef-qr", dest)
 
     def test_without_a_pid_the_plain_link_still_renders(self) -> None:

@@ -484,7 +484,11 @@ class SiteSettings(models.Model):
     viator_mcid = models.CharField(
         max_length=32,
         blank=True,
-        help_text="Viator's tracking id for link placements. Leave blank to use 42383.",
+        help_text=(
+            "Leave blank unless Viator gave you a campaign id for this account. "
+            "A value that is not yours makes their links fall back to a listing "
+            "page instead of the tour."
+        ),
     )
     viator_campaign = models.CharField(
         max_length=60,

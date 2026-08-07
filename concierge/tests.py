@@ -1441,3 +1441,48 @@ class BlockedPreviewTests(TestCase):
 
     def test_other_failures_keep_the_plain_status(self) -> None:
         self.assertIn("HTTP 500", self._fetch_with_status(500))
+
+
+class ServiceAdminFormTests(TestCase):
+    """The form should only offer the fields the chosen channel actually uses."""
+
+    def setUp(self) -> None:
+        from django.contrib.admin.sites import site as admin_site
+
+        self.model_admin = admin_site._registry[Service]
+
+    def _fields(self):
+        return {f for _, opts in self.model_admin.fieldsets for f in opts["fields"]}
+
+    def test_every_editable_field_is_reachable(self) -> None:
+        # fieldsets are a whitelist: a field missing here is invisible in the
+        # admin with no error anywhere.
+        editable = {
+            f.name for f in Service._meta.get_fields()
+            if getattr(f, "editable", False) and not f.auto_created and f.name != "id"
+        }
+        self.assertEqual(editable - self._fields(), set())
+
+    def test_channel_specific_groups_are_marked_for_the_form_script(self) -> None:
+        classes = {c for _, opts in self.model_admin.fieldsets for c in opts.get("classes", ())}
+        self.assertIn("referral-only", classes)
+        self.assertIn("whatsapp-only", classes)
+
+    def test_the_referral_url_sits_in_the_referral_group(self) -> None:
+        for name, opts in self.model_admin.fieldsets:
+            if "referral_url" in opts["fields"]:
+                self.assertIn("referral-only", opts.get("classes", ()))
+                break
+        else:
+            self.fail("referral_url is not in any fieldset")
+
+    def test_provider_routing_sits_in_the_whatsapp_group(self) -> None:
+        for name, opts in self.model_admin.fieldsets:
+            if "default_provider" in opts["fields"]:
+                self.assertIn("whatsapp-only", opts.get("classes", ()))
+                break
+        else:
+            self.fail("default_provider is not in any fieldset")
+
+    def test_the_toggle_script_is_loaded(self) -> None:
+        self.assertIn("concierge/admin/service_form.js", list(self.model_admin.media._js))

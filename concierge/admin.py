@@ -46,6 +46,64 @@ class ServiceAdmin(admin.ModelAdmin):
 
     actions = ["fetch_preview_images", "fetch_preview_images_replacing", "translate_names"]
 
+    # Grouped by what the host is deciding, and narrowed by channel: the fields
+    # a WhatsApp service needs are not the ones a Viator service needs, and
+    # showing all of them invites filling in the ignored ones.
+    fieldsets = (
+        (
+            "What guests see",
+            {
+                "fields": (
+                    "name_en", "name_es", "name_fr",
+                    "description_en", "description_es", "description_fr",
+                    "image",
+                ),
+                "description": (
+                    "Write the English name; Spanish and French are filled in on save "
+                    "if left blank. The image is fetched from an Airbnb link automatically. "
+                    "Descriptions are stored but not shown on the card yet."
+                ),
+            },
+        ),
+        (
+            "Where the button sends them",
+            {"fields": ("channel",)},
+        ),
+        (
+            "Booking link",
+            {
+                "classes": ("referral-only",),
+                "fields": ("referral_url",),
+                "description": (
+                    "Paste the whole product URL. Viator links get your affiliate id and "
+                    "the venue's campaign added automatically — do not build them by hand."
+                ),
+            },
+        ),
+        (
+            "WhatsApp routing",
+            {
+                "classes": ("whatsapp-only",),
+                "fields": ("default_provider", "keywords"),
+                "description": (
+                    "Who the referral is forwarded to, and the words that match this "
+                    "service when a guest writes their own message."
+                ),
+            },
+        ),
+        (
+            "Money",
+            {
+                "fields": ("expected_commission_usd",),
+                "description": "Used as the default amount when recording a commission.",
+            },
+        ),
+        ("Listing", {"fields": ("slug", "sort_order", "active")}),
+    )
+
+    class Media:
+        js = ("concierge/admin/service_form.js",)
+
     def save_model(self, request, obj, form, change):
         """Grab the card image as soon as a referral link is set.
 

@@ -17,17 +17,15 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-# Only `pid` is sent by default.
+# What Viator's own link builder emits. Pasting a product URL into it returns
+# exactly `?pid=<account>&mcid=42383&medium=link`, so that is what this
+# reproduces — their tool is the authority on the shape, not the prose docs.
 #
-# Viator's documentation shows pid, mcid, medium and campaign together, but on
-# this account anything beyond `pid` made their router drop the product and
-# serve the destination listing instead — the guest saw "multiple results"
-# rather than the tour they tapped. Verified against live links one parameter
-# at a time: pid alone renders the product; pid+mcid and pid+medium do not.
-#
-# So every other parameter is opt-in, and only worth turning on once it has been
-# checked against a real link. An unverified tracking parameter costs a booking,
-# which is worse than the attribution it was meant to buy.
+# `campaign` stays opt-in: the builder does not add one unless asked, and a
+# venue's code is only worth sending once a link carrying it has been checked
+# against a live product page.
+DEFAULT_MCID = "42383"
+DEFAULT_MEDIUM = "link"
 
 # Viator: "only include alphanumeric characters and dashes — special characters
 # may break tracking and attribution entirely."
@@ -71,10 +69,13 @@ def viator_url(url: str, *, pid: str, mcid: str = "", campaign: str = "", medium
     params = parse_qsl(parsed.query, keep_blank_values=True)
     present = {key.lower() for key, _ in params}
 
-    additions = {"pid": pid}
-    for key, value in (("mcid", mcid), ("medium", medium), ("campaign", campaign)):
-        if (value or "").strip():
-            additions[key] = value.strip()
+    additions = {
+        "pid": pid,
+        "mcid": (mcid or "").strip() or DEFAULT_MCID,
+        "medium": (medium or "").strip() or DEFAULT_MEDIUM,
+    }
+    if (campaign or "").strip():
+        additions["campaign"] = campaign.strip()
 
     for key, value in additions.items():
         if key not in present:

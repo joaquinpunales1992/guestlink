@@ -492,9 +492,8 @@ class SiteSettings(models.Model):
         max_length=32,
         blank=True,
         help_text=(
-            "Leave blank unless Viator gave you a campaign id for this account. "
-            "A value that is not yours makes their links fall back to a listing "
-            "page instead of the tour."
+            "Leave blank to send 42383, which is what Viator's own link builder "
+            "emits for link placements."
         ),
     )
     viator_campaign = models.CharField(

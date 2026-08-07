@@ -811,25 +811,19 @@ class ViatorAffiliateUrlTests(TestCase):
     def _params(self, url):
         return dict(parse_qsl(urlparse(url).query))
 
-    def test_only_pid_is_sent_by_default(self) -> None:
-        # Everything beyond pid broke live product links on this account.
+    def test_output_matches_viator_own_link_builder(self) -> None:
+        # Pasting a product URL into Viator's affiliate link tool returns
+        # exactly this shape; reproducing it is the whole job.
         out = viator_url(self.PLAIN, pid=self.PID)
-        self.assertEqual(self._params(out), {"pid": self.PID})
+        self.assertEqual(self._params(out), {"pid": self.PID, "mcid": "42383", "medium": "link"})
         self.assertTrue(out.startswith(self.PLAIN + "?"))
 
-    def test_optional_parameters_are_sent_only_when_configured(self) -> None:
-        out = viator_url(self.PLAIN, pid=self.PID, mcid="99999", medium="link", campaign="la-bahia")
-        self.assertEqual(
-            self._params(out),
-            {"pid": self.PID, "mcid": "99999", "medium": "link", "campaign": "la-bahia"},
-        )
+    def test_a_campaign_is_added_only_when_configured(self) -> None:
+        self.assertNotIn("campaign=", viator_url(self.PLAIN, pid=self.PID))
+        self.assertIn("campaign=la-bahia", viator_url(self.PLAIN, pid=self.PID, campaign="la-bahia"))
 
-    def test_nothing_is_invented(self) -> None:
-        # Sending a borrowed mcid, or medium, made Viator serve a destination
-        # listing instead of the product — observed in production.
-        out = viator_url(self.PLAIN, pid=self.PID)
-        for param in ("mcid", "medium", "campaign"):
-            self.assertNotIn(f"{param}=", out)
+    def test_a_configured_mcid_overrides_the_default(self) -> None:
+        self.assertEqual(self._params(viator_url(self.PLAIN, pid=self.PID, mcid="99999"))["mcid"], "99999")
 
     def test_existing_query_parameters_are_preserved(self) -> None:
         out = viator_url(self.PLAIN + "?m=1&sortType=rating", pid=self.PID)

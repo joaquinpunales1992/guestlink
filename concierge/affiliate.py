@@ -4,7 +4,7 @@ Viator attributes a booking from query parameters appended to any viator.com
 URL, so the host can paste a normal product page and let this add the tracking:
 
     https://www.viator.com/tours/…/d5021-123P4
-    → …/d5021-123P4?pid=P00012345&mcid=42383&medium=link
+    → …/d5021-123P4?pid=P00012345&mcid=42383&medium=link&target_lander=NONE
 
 Existing parameters are never touched. Viator's own guidance is that a booking
 cannot be paid out if `pid` or `mcid` is modified or removed, so a link the
@@ -26,6 +26,16 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 # against a live product page.
 DEFAULT_MCID = "42383"
 DEFAULT_MEDIUM = "link"
+
+# Viator Partner Support, asked why an affiliate link lands on a list of
+# similar tours instead of the product: that is deliberate — the list is meant
+# to maximise the chance of *some* booking, with the chosen activity first.
+# `target_lander=NONE` opts out and sends the guest straight to the activity.
+#
+# The card names one specific service, so the guest must land on that service;
+# a listing page reads as a broken link. Support confirmed this changes only
+# the landing behaviour, not attribution — links stay payable.
+DEFAULT_TARGET_LANDER = "NONE"
 
 # Viator: "only include alphanumeric characters and dashes — special characters
 # may break tracking and attribution entirely."
@@ -53,6 +63,10 @@ def is_viator(url: str) -> bool:
 #
 # Viator's own guidance is that any active viator.com URL can be deep-linked,
 # so the safe move is to add tracking and change nothing else.
+#
+# Note that a destination listing has a second, unrelated cause: an affiliate
+# link without `target_lander=NONE` shows one by design. Both are handled, and
+# a listing appearing again does not on its own implicate the path.
 
 
 def viator_url(url: str, *, pid: str, mcid: str = "", campaign: str = "", medium: str = "") -> str:
@@ -73,6 +87,7 @@ def viator_url(url: str, *, pid: str, mcid: str = "", campaign: str = "", medium
         "pid": pid,
         "mcid": (mcid or "").strip() or DEFAULT_MCID,
         "medium": (medium or "").strip() or DEFAULT_MEDIUM,
+        "target_lander": DEFAULT_TARGET_LANDER,
     }
     if (campaign or "").strip():
         additions["campaign"] = campaign.strip()

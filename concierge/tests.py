@@ -813,10 +813,24 @@ class ViatorAffiliateUrlTests(TestCase):
 
     def test_output_matches_viator_own_link_builder(self) -> None:
         # Pasting a product URL into Viator's affiliate link tool returns
-        # exactly this shape; reproducing it is the whole job.
+        # exactly this shape; reproducing it is the whole job. The one addition
+        # is target_lander, which their support told us to append by hand.
         out = viator_url(self.PLAIN, pid=self.PID)
-        self.assertEqual(self._params(out), {"pid": self.PID, "mcid": "42383", "medium": "link"})
+        self.assertEqual(
+            self._params(out),
+            {"pid": self.PID, "mcid": "42383", "medium": "link", "target_lander": "NONE"},
+        )
         self.assertTrue(out.startswith(self.PLAIN + "?"))
+
+    def test_the_guest_lands_on_the_activity_not_a_list_of_alternatives(self) -> None:
+        # Without target_lander=NONE Viator deliberately shows a carousel of
+        # similar tours. The card named one service, so that reads as a broken
+        # link — the guest must arrive at the activity they tapped.
+        self.assertEqual(self._params(viator_url(self.PLAIN, pid=self.PID))["target_lander"], "NONE")
+
+    def test_a_host_pasted_lander_choice_is_respected(self) -> None:
+        already = self.PLAIN + "?target_lander=SEARCH"
+        self.assertEqual(self._params(viator_url(already, pid=self.PID))["target_lander"], "SEARCH")
 
     def test_a_campaign_is_added_only_when_configured(self) -> None:
         self.assertNotIn("campaign=", viator_url(self.PLAIN, pid=self.PID))
@@ -833,10 +847,13 @@ class ViatorAffiliateUrlTests(TestCase):
         self.assertEqual(params["pid"], self.PID)
 
     def test_existing_tracking_is_never_overwritten(self) -> None:
-        # Viator will not pay out if pid or mcid is modified — a link the host
-        # pasted with its own tracking must survive untouched.
+        # Viator will not pay out if pid or mcid is modified — every parameter
+        # the host pasted keeps its value. target_lander is still appended:
+        # it carries no attribution, and a link that lands on a listing is
+        # just as broken whoever built it.
         already = self.PLAIN + "?pid=P00099999&mcid=11111&medium=banner"
-        self.assertEqual(self._params(viator_url(already, pid=self.PID)), self._params(already))
+        params = self._params(viator_url(already, pid=self.PID))
+        self.assertEqual(params, dict(self._params(already), target_lander="NONE"))
 
     def test_campaign_is_added_only_when_configured(self) -> None:
         self.assertNotIn("campaign", self._params(viator_url(self.PLAIN, pid=self.PID)))

@@ -328,13 +328,13 @@ class AssignedFilter(admin.SimpleListFilter):
 class QrTagAdmin(admin.ModelAdmin):
     """Individual printed cards. Assign them here, or by scanning one."""
 
-    list_display = ("token", "location", "batch", "assigned_at", "scan_link")
+    list_display = ("token", "location", "batch", "artwork", "assigned_at", "scan_link")
     # The desk flow: filter to Unassigned, set several locations, save once.
     list_editable = ("location",)
     list_filter = (AssignedFilter, "batch", "location")
     search_fields = ("token",)
-    readonly_fields = ("token", "assigned_at", "created_at", "scan_link")
-    fields = ("token", "location", "batch", "scan_link", "assigned_at", "created_at")
+    readonly_fields = ("token", "assigned_at", "created_at", "scan_link", "qr_preview")
+    fields = ("token", "location", "batch", "qr_preview", "scan_link", "assigned_at", "created_at")
 
     def get_search_results(self, request, queryset, search_term):
         # Tokens are printed and stored uppercase; typing one off a card in
@@ -346,6 +346,31 @@ class QrTagAdmin(admin.ModelAdmin):
         if not obj.pk:
             return "—"
         return format_html('<a href="{}" target="_blank">{}</a>', obj.path(), obj.path())
+
+    @admin.display(description="artwork")
+    def artwork(self, obj: QrTag) -> str:
+        """For dropping this one card's code into a card template elsewhere."""
+        if not obj.pk:
+            return "—"
+        svg = reverse("tag_qr", args=[obj.token, "svg"])
+        png = reverse("tag_qr", args=[obj.token, "png"])
+        return format_html(
+            '<a href="{}?download=1">SVG</a> · <a href="{}?download=1">PNG</a>', svg, png
+        )
+
+    @admin.display(description="QR code")
+    def qr_preview(self, obj: QrTag) -> str:
+        if not obj.pk:
+            return "—"
+        svg = reverse("tag_qr", args=[obj.token, "svg"])
+        png = reverse("tag_qr", args=[obj.token, "png"])
+        return format_html(
+            '<div><img src="{}" alt="QR code for {}" style="width:200px;height:200px">'
+            '<p style="margin:6px 0 0">Encodes <code>{}</code><br>'
+            'Download: <a href="{}?download=1">SVG (for a card template)</a> · '
+            '<a href="{}?download=1">PNG</a></p></div>',
+            svg, obj.token, obj.path(), svg, png,
+        )
 
     def has_add_permission(self, request) -> bool:
         # Cards come from a batch, so the print sheet and the tokens can never

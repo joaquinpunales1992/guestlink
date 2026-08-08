@@ -274,6 +274,31 @@ def _assign_screen(request: HttpRequest, tag: QrTag) -> HttpResponse:
 
 
 @staff_member_required
+def tag_qr(request: HttpRequest, token: str, fmt: str) -> HttpResponse:
+    """One pre-printed card's code, as SVG or PNG.
+
+    The batch PDF is a finished sheet; this is the raw artwork for dropping a
+    single card into a card template elsewhere. SVG for that — it stays sharp
+    at whatever size the template places it.
+    """
+    tag = get_object_or_404(QrTag, token=token.upper())
+    data = request.build_absolute_uri(tag.path())
+
+    try:
+        if fmt == "svg":
+            body, content_type = qr.svg_bytes(data), "image/svg+xml"
+        else:
+            body, content_type = qr.png_bytes(data), "image/png"
+    except qr.QrUnavailable as exc:
+        return HttpResponse(str(exc), status=503, content_type="text/plain")
+
+    response = HttpResponse(body, content_type=content_type)
+    disposition = "attachment" if request.GET.get("download") else "inline"
+    response["Content-Disposition"] = f'{disposition}; filename="qr-{tag.token}.{fmt}"'
+    return response
+
+
+@staff_member_required
 def qr_batch_pdf(request: HttpRequest, pk: int) -> HttpResponse:
     """The whole batch as an A4 PDF, ready to print and guillotine."""
     batch = get_object_or_404(QrBatch, pk=pk)

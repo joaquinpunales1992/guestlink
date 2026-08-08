@@ -16,6 +16,9 @@ urlpatterns = [
     path("healthz/", concierge_views.healthz, name="healthz"),
     path("go/<slug:service_slug>/", concierge_views.go, name="go"),
     # Staff-only, and declared before the location catch-all below.
+    # Before the location form below: a token is not a slug, and this keeps the
+    # two from ever being confused as the URL patterns grow.
+    path("qr/tag/<str:token>.<str:fmt>", concierge_views.tag_qr, name="tag_qr"),
     path("qr/<slug:slug>.<str:fmt>", concierge_views.location_qr, name="location_qr"),
     path("qr-batch/<int:pk>.pdf", concierge_views.qr_batch_pdf, name="qr_batch_pdf"),
     # Pre-printed cards. The token is in the ink and the venue is not, so these

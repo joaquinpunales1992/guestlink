@@ -1303,6 +1303,50 @@ class QrTagAssignTests(TestCase):
         self.assertIsNone(self.tag.location)
 
 
+@override_settings(ALLOWED_HOSTS=["testserver"])
+class QrTagArtworkTests(TestCase):
+    """One card's code on its own, for pasting into a card template."""
+
+    def setUp(self) -> None:
+        self.tag = QrTag.mint(1)[0]
+        User = get_user_model()
+        self.staff = User.objects.create_user("staffer", password="pw", is_staff=True)
+        self.client.force_login(self.staff)
+
+    def test_both_formats_render(self) -> None:
+        svg = self.client.get(f"/qr/tag/{self.tag.token}.svg")
+        png = self.client.get(f"/qr/tag/{self.tag.token}.png")
+        self.assertEqual(svg["Content-Type"], "image/svg+xml")
+        self.assertEqual(png["Content-Type"], "image/png")
+        self.assertIn(b"<svg", svg.content)
+        self.assertIn(b"path", svg.content)  # vector, so it scales in the template
+
+    def test_it_encodes_the_same_url_the_printed_card_does(self) -> None:
+        # Artwork that disagrees with the batch PDF would be the worst kind of
+        # bug here: both scan, one goes to the wrong place.
+        with patch("concierge.qr.svg_bytes", return_value=b"<svg/>") as render:
+            self.client.get(f"/qr/tag/{self.tag.token}.svg")
+        self.assertEqual(render.call_args[0][0], f"http://testserver/q/{self.tag.token}")
+
+    def test_download_flag_names_the_file_after_the_token(self) -> None:
+        response = self.client.get(f"/qr/tag/{self.tag.token}.svg?download=1")
+        self.assertIn(f'attachment; filename="qr-{self.tag.token}.svg"', response["Content-Disposition"])
+
+    def test_the_token_is_case_insensitive(self) -> None:
+        self.assertEqual(self.client.get(f"/qr/tag/{self.tag.token.lower()}.svg").status_code, 200)
+
+    def test_it_is_staff_only(self) -> None:
+        self.client.logout()
+        self.assertEqual(self.client.get(f"/qr/tag/{self.tag.token}.svg").status_code, 302)
+
+    def test_an_unknown_token_is_a_404(self) -> None:
+        self.assertEqual(self.client.get("/qr/tag/ZZZZZZ.svg").status_code, 404)
+
+    def test_it_does_not_shadow_the_location_route(self) -> None:
+        Location.objects.create(name="Tag", slug="tag")
+        self.assertEqual(self.client.get("/qr/tag.svg")["Content-Type"], "image/svg+xml")
+
+
 class QrBatchPdfTests(TestCase):
     """The printable sheet."""
 

@@ -16,6 +16,7 @@ import qrcode
 from decimal import Decimal
 
 from django.conf import settings
+from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
@@ -1486,6 +1487,42 @@ class QrAdminTests(TestCase):
     def test_cards_cannot_be_added_outside_a_batch(self) -> None:
         # Otherwise a card exists with no print sheet it belongs to.
         self.assertEqual(self.client.get("/admin/concierge/qrtag/add/").status_code, 403)
+
+    def test_the_index_is_grouped_by_task(self) -> None:
+        response = self.client.get("/admin/")
+        sections = [app["name"] for app in response.context["app_list"]]
+        self.assertEqual(
+            sections,
+            ["Guest-facing", "QR cards", "Bookings & money", "Records", "Settings"],
+        )
+
+    def test_every_registered_model_still_appears(self) -> None:
+        # The grouping must never hide a model by forgetting to list it.
+        response = self.client.get("/admin/")
+        shown = {
+            model["object_name"]
+            for app in response.context["app_list"]
+            for model in app["models"]
+        }
+        registered = {model._meta.object_name for model in admin.site._registry}
+        self.assertEqual(shown, registered)
+
+    def test_an_unmapped_model_falls_through_to_other(self) -> None:
+        from concierge.admin_site import SECTIONS
+
+        mapped = {name for _, names in SECTIONS for name in names}
+        with patch("concierge.admin_site.SECTIONS", (("Guest-facing", ("Location",)),)):
+            response = self.client.get("/admin/")
+        sections = [app["name"] for app in response.context["app_list"]]
+        self.assertEqual(sections, ["Guest-facing", "Other"])
+        other = next(a for a in response.context["app_list"] if a["name"] == "Other")
+        self.assertIn("QrTag", {m["object_name"] for m in other["models"]})
+        # The real map still covers everything, so "Other" never renders in practice.
+        self.assertTrue({"QrTag", "Location", "SiteSettings"} <= mapped)
+
+    def test_the_per_app_page_is_left_alone(self) -> None:
+        # Django builds it with the same method; regrouping there would be wrong.
+        self.assertEqual(self.client.get("/admin/concierge/").status_code, 200)
 
 
 @override_settings(ALLOWED_HOSTS=["testserver"], WHATSAPP_BUSINESS_NUMBER="573222448409")

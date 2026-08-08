@@ -84,7 +84,9 @@ ALLOWED_HOSTS = _env_list("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1")
 CSRF_TRUSTED_ORIGINS = _env_list("DJANGO_CSRF_TRUSTED_ORIGINS")
 
 INSTALLED_APPS = [
-    "django.contrib.admin",
+    # Not "django.contrib.admin": this swaps in an AdminSite that groups the
+    # index by task instead of alphabetically. See concierge/admin_site.py.
+    "concierge.admin_site.GuestlinkAdminConfig",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",

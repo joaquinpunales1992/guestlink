@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Assign card {{ tag.token }}</title>
+  <style>
+    :root {
+      --petrol: #0d4650; --sea: #17727f; --cream: #f6efe2; --ink: #143840;
+      --muted: #5f7b81; --terracotta: #d9694a; --border: rgba(13, 70, 80, 0.14);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; color: var(--ink); background: var(--cream);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .hero {
+      background: linear-gradient(165deg, var(--sea) 0%, var(--petrol) 100%);
+      color: #fff; padding: 26px 22px; text-align: center;
+    }
+    .hero p { margin: 0 0 6px; font-size: 12px; letter-spacing: 0.09em; text-transform: uppercase;
+              color: rgba(255,255,255,0.72); }
+    .token {
+      margin: 0; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 40px; font-weight: 700; letter-spacing: 0.13em;
+    }
+    main { max-width: 480px; margin: 0 auto; padding: 22px; }
+    .card {
+      background: #fff; border: 1px solid var(--border); border-radius: 14px; padding: 20px;
+    }
+    label { display: block; font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+    select, button {
+      width: 100%; font-size: 16px; border-radius: 10px; padding: 13px 12px;
+      border: 1px solid var(--border); background: #fff; color: var(--ink);
+    }
+    button {
+      margin-top: 14px; background: var(--sea); color: #fff; border: 0;
+      font-weight: 600; cursor: pointer;
+    }
+    .status {
+      padding: 11px 13px; border-radius: 10px; font-size: 14px; margin-bottom: 16px;
+      background: rgba(23, 114, 127, 0.09); border: 1px solid var(--border);
+    }
+    .status.done { background: rgba(217, 105, 74, 0.10); }
+    .muted { color: var(--muted); font-size: 13px; line-height: 1.55; }
+    .links { margin-top: 18px; text-align: center; font-size: 13px; }
+    a { color: var(--sea); }
+  </style>
+</head>
+<body>
+  <div class="hero">
+    <p>QR card</p>
+    <h1 class="token">{{ tag.token }}</h1>
+  </div>
+
+  <main>
+    {% if just_assigned %}
+      <div class="status done">Saved. This card now opens
+        {% if tag.location %}<strong>{{ tag.location.name }}</strong>{% else %}the generic page{% endif %}.</div>
+    {% endif %}
+
+    <div class="card">
+      {% if tag.location %}
+        <div class="status">Currently assigned to <strong>{{ tag.location.name }}</strong>.
+          Changing it re-points this printed card — nothing needs reprinting.</div>
+      {% else %}
+        <div class="status">Not assigned yet. Until it is, scanning shows the generic
+          service page with no venue attribution.</div>
+      {% endif %}
+
+      <form method="post" action="{% url 'tag_assign' tag.token %}">
+        {% csrf_token %}
+        <label for="location">Stick this card at</label>
+        <select name="location" id="location">
+          <option value="">— unassigned —</option>
+          {% for location in locations %}
+            <option value="{{ location.pk }}"
+              {% if tag.location_id == location.pk %}selected{% endif %}>{{ location.name }}</option>
+          {% endfor %}
+        </select>
+        <button type="submit">Save</button>
+      </form>
+
+      <p class="links"><a href="{{ tag.path }}?preview=1">See what a guest sees →</a></p>
+    </div>
+
+    <p class="muted links">
+      {% if tag.batch %}From batch “{{ tag.batch.label }}”. {% endif %}
+      Only you see this screen — a guest scanning the same card gets the service page.
+    </p>
+  </main>
+</body>
+</html>

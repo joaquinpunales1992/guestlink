@@ -20,9 +20,9 @@ from django.urls import reverse
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from . import qr
+from . import qr, qr_pdf
 from .links import LANGUAGES, destination, place_name
-from .models import Location, LocationEvent, Service, SiteSettings, Ticket
+from .models import Location, LocationEvent, QrBatch, QrTag, Service, SiteSettings, Ticket
 from .relay import handle_inbound
 
 logger = logging.getLogger(__name__)
@@ -140,7 +140,15 @@ def landing(request: HttpRequest, slug: str = "") -> HttpResponse:
     location = None
     if slug:
         location = get_object_or_404(Location, slug=slug, active=True)
+    return _landing_response(request, location)
 
+
+def _landing_response(request: HttpRequest, location) -> HttpResponse:
+    """Render the guest page for `location`, or the generic page when None.
+
+    Shared by the two things a QR can encode: a venue slug, and a pre-printed
+    tag token that resolves to a venue later.
+    """
     services = list(location.visible_services() if location else Service.objects.filter(active=True))
     site = SiteSettings.load()
 
@@ -208,6 +216,85 @@ def location_qr(request: HttpRequest, slug: str, fmt: str) -> HttpResponse:
     # inline so the admin can preview it; the download links add ?download=1
     disposition = "attachment" if request.GET.get("download") else "inline"
     response["Content-Disposition"] = f'{disposition}; filename="qr-{location.slug}.{fmt}"'
+    return response
+
+
+def tag_landing(request: HttpRequest, token: str) -> HttpResponse:
+    """A pre-printed card was scanned.
+
+    Assigned to an active venue, this is that venue's page — identical to what
+    its /<slug> code would have shown. Unassigned, it is the generic page:
+    a guest holding a real card in a real venue gets a working service menu
+    rather than an apology, at the cost of the booking carrying no venue
+    campaign (so no revenue share is owed to anyone, which is correct — we do
+    not yet know whose card it is).
+
+    A deactivated venue is treated the same way, for the same reason.
+    """
+    tag = get_object_or_404(QrTag, token=token.upper())
+    location = tag.location if (tag.location and tag.location.active) else None
+
+    # Staff scanning an unassigned card are here to assign it, not to read the
+    # menu; ?preview=1 gets the guest's view of the same card.
+    wants_assign = request.GET.get("assign") or (location is None and not request.GET.get("preview"))
+    if request.user.is_staff and wants_assign:
+        return _assign_screen(request, tag)
+
+    return _landing_response(request, location)
+
+
+@staff_member_required
+def tag_assign(request: HttpRequest, token: str) -> HttpResponse:
+    """Point a printed card at a venue, or release it back to the pile."""
+    tag = get_object_or_404(QrTag, token=token.upper())
+
+    if request.method != "POST":
+        return _assign_screen(request, tag)
+
+    raw = (request.POST.get("location") or "").strip()
+    if raw:
+        tag.location = get_object_or_404(Location, pk=raw)
+    else:
+        tag.location = None
+    tag.save()
+
+    return HttpResponseRedirect(f"{tag.path()}?assigned=1")
+
+
+def _assign_screen(request: HttpRequest, tag: QrTag) -> HttpResponse:
+    return render(
+        request,
+        "concierge/qr_assign.html",
+        {
+            "tag": tag,
+            "locations": Location.objects.filter(active=True),
+            "just_assigned": bool(request.GET.get("assigned")),
+        },
+    )
+
+
+@staff_member_required
+def qr_batch_pdf(request: HttpRequest, pk: int) -> HttpResponse:
+    """The whole batch as an A4 PDF, ready to print and guillotine."""
+    batch = get_object_or_404(QrBatch, pk=pk)
+    cards = [
+        (tag.token, request.build_absolute_uri(tag.path()))
+        for tag in batch.tags.order_by("token")
+    ]
+
+    try:
+        body = qr_pdf.batch_pdf_bytes(
+            cards,
+            title=f"QR cards — {batch.label}",
+            caption=request.get_host(),
+        )
+    except qr_pdf.PdfUnavailable as exc:
+        # As with the QR images: a missing optional dependency should read as
+        # an instruction, not a 500.
+        return HttpResponse(str(exc), status=503, content_type="text/plain")
+
+    response = HttpResponse(body, content_type="application/pdf")
+    response["Content-Disposition"] = f'attachment; filename="qr-batch-{batch.pk}.pdf"'
     return response
 
 

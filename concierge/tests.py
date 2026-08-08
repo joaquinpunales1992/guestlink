@@ -21,7 +21,7 @@ from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.test import RequestFactory, TestCase, override_settings
 
-from concierge import qr
+from concierge import qr, qr_pdf
 from concierge.affiliate import is_viator, viator_url
 from concierge.classifier import Classification
 from concierge.models import (
@@ -31,6 +31,8 @@ from concierge.models import (
     LocationEvent,
     Message,
     Provider,
+    QrBatch,
+    QrTag,
     Service,
     SiteSettings,
     Ticket,
@@ -1126,6 +1128,320 @@ class LocationQrTests(TestCase):
         Location.objects.create(name="Impostor", slug="qr")
         self.client.force_login(self.staff)
         self.assertEqual(self.client.get("/qr/la-bahia.svg")["Content-Type"], "image/svg+xml")
+
+
+class QrTagTokenTests(TestCase):
+    """The token is the part that gets printed, so it has to survive a drawer."""
+
+    def test_tokens_are_minted_unique_and_readable(self) -> None:
+        tags = QrTag.mint(40)
+        tokens = {tag.token for tag in tags}
+        self.assertEqual(len(tokens), 40)
+        for token in tokens:
+            self.assertEqual(len(token), QrTag.TOKEN_LENGTH)
+            # Nothing a human can misread off a printed card.
+            self.assertFalse(set(token) & set("01OI"))
+            self.assertTrue(token.isupper())
+
+    def test_a_fresh_card_is_unassigned(self) -> None:
+        tag = QrTag.mint(1)[0]
+        self.assertFalse(tag.is_assigned)
+        self.assertIsNone(tag.assigned_at)
+
+    def test_assigning_and_releasing_keeps_the_timestamp_honest(self) -> None:
+        tag = QrTag.mint(1)[0]
+        tag.location = Location.objects.create(name="La Bahía", slug="la-bahia")
+        tag.save()
+        self.assertIsNotNone(tag.assigned_at)
+
+        tag.location = None
+        tag.save()
+        self.assertIsNone(tag.assigned_at)
+
+    def test_the_token_never_changes_once_minted(self) -> None:
+        # It is in the ink. A regenerated token would orphan a printed card,
+        # which is the exact failure this model exists to avoid.
+        tag = QrTag.mint(1)[0]
+        original = tag.token
+        tag.location = Location.objects.create(name="Reef", slug="reef")
+        tag.save()
+        tag.refresh_from_db()
+        self.assertEqual(tag.token, original)
+
+    def test_deleting_a_venue_leaves_the_card_reusable(self) -> None:
+        # The card physically exists; losing the row would lose the token that
+        # is printed on it.
+        location = Location.objects.create(name="Gone", slug="gone")
+        tag = QrTag.mint(1)[0]
+        tag.location = location
+        tag.save()
+
+        location.delete()
+        tag.refresh_from_db()
+        self.assertIsNone(tag.location)
+        self.assertFalse(tag.is_assigned)
+
+
+@override_settings(ALLOWED_HOSTS=["testserver"], WHATSAPP_BUSINESS_NUMBER="573222448409")
+class QrTagScanTests(TestCase):
+    """What a scan of a pre-printed card actually does."""
+
+    def setUp(self) -> None:
+        Service.objects.create(slug="saona", name_en="Saona excursion")
+        self.location = Location.objects.create(name="Restaurante La Bahía", slug="la-bahia")
+        self.tag = QrTag.mint(1)[0]
+        User = get_user_model()
+        self.staff = User.objects.create_user("staffer", password="pw", is_staff=True)
+
+    def test_an_assigned_card_attributes_to_its_venue(self) -> None:
+        # Not the venue's name — that only shows if it has its own branding
+        # copy. The ?at= on every link is what carries the attribution the
+        # revenue share is paid on, so that is the thing worth asserting.
+        self.tag.location = self.location
+        self.tag.save()
+        html = self.client.get(self.tag.path()).content.decode()
+        self.assertIn("at=la-bahia", html.replace("&amp;", "&"))
+
+    def test_an_assigned_card_matches_what_the_slug_url_serves(self) -> None:
+        # The whole point of routing through _landing_response: a tag must not
+        # become a second, subtly different rendering of the same venue.
+        self.tag.location = self.location
+        self.tag.save()
+        by_tag = self.client.get(self.tag.path()).content.decode()
+        by_slug = self.client.get("/la-bahia").content.decode()
+        self.assertEqual(by_tag, by_slug)
+
+    def test_an_unassigned_card_shows_the_generic_page_not_an_error(self) -> None:
+        # A guest holding a real card in a real venue gets a working menu.
+        response = self.client.get(self.tag.path())
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("Saona excursion", response.content.decode())
+
+    def test_a_scan_is_counted_either_way(self) -> None:
+        self.client.get(self.tag.path())
+        self.assertEqual(LocationEvent.objects.filter(kind=LocationEvent.Kind.SCAN).count(), 1)
+        # Unassigned, so it belongs to no venue and owes no revenue share.
+        self.assertIsNone(LocationEvent.objects.get().location)
+
+    def test_a_deactivated_venue_falls_back_rather_than_404ing(self) -> None:
+        self.tag.location = self.location
+        self.tag.save()
+        Location.objects.filter(pk=self.location.pk).update(active=False)
+        self.assertEqual(self.client.get(self.tag.path()).status_code, 200)
+
+    def test_the_token_is_case_insensitive(self) -> None:
+        # Printed uppercase, but typed by hand into a phone that autocorrects.
+        self.assertEqual(self.client.get(f"/q/{self.tag.token.lower()}").status_code, 200)
+
+    def test_an_unknown_token_is_a_404(self) -> None:
+        self.assertEqual(self.client.get("/q/ZZZZZZ").status_code, 404)
+
+    def test_the_route_is_not_shadowed_by_a_location_slug(self) -> None:
+        Location.objects.create(name="Impostor", slug="q")
+        self.assertEqual(self.client.get(self.tag.path()).status_code, 200)
+
+    def test_a_guest_never_sees_the_assign_screen(self) -> None:
+        html = self.client.get(self.tag.path()).content.decode()
+        self.assertNotIn("Stick this card at", html)
+
+
+@override_settings(ALLOWED_HOSTS=["testserver"], WHATSAPP_BUSINESS_NUMBER="573222448409")
+class QrTagAssignTests(TestCase):
+    """Assigning a card by scanning it, standing in the venue."""
+
+    def setUp(self) -> None:
+        Service.objects.create(slug="saona", name_en="Saona excursion")
+        self.location = Location.objects.create(name="Restaurante La Bahía", slug="la-bahia")
+        self.tag = QrTag.mint(1)[0]
+        User = get_user_model()
+        self.staff = User.objects.create_user("staffer", password="pw", is_staff=True)
+
+    def test_staff_scanning_an_unassigned_card_get_the_assign_screen(self) -> None:
+        self.client.force_login(self.staff)
+        html = self.client.get(self.tag.path()).content.decode()
+        self.assertIn("Stick this card at", html)
+        self.assertIn(self.tag.token, html)
+
+    def test_staff_can_still_see_the_guest_view(self) -> None:
+        self.client.force_login(self.staff)
+        html = self.client.get(f"{self.tag.path()}?preview=1").content.decode()
+        self.assertNotIn("Stick this card at", html)
+        self.assertIn("Saona excursion", html)
+
+    def test_posting_a_location_assigns_the_card(self) -> None:
+        self.client.force_login(self.staff)
+        self.client.post(f"/q/{self.tag.token}/assign/", {"location": self.location.pk})
+        self.tag.refresh_from_db()
+        self.assertEqual(self.tag.location, self.location)
+
+    def test_an_assigned_card_can_be_repointed_without_reprinting(self) -> None:
+        other = Location.objects.create(name="The Reef", slug="the-reef")
+        self.tag.location = self.location
+        self.tag.save()
+
+        self.client.force_login(self.staff)
+        self.client.post(f"/q/{self.tag.token}/assign/", {"location": other.pk})
+        self.tag.refresh_from_db()
+        self.assertEqual(self.tag.location, other)
+        # The same physical card now attributes to the new venue.
+        html = self.client.get(self.tag.path()).content.decode().replace("&amp;", "&")
+        self.assertIn("at=the-reef", html)
+        self.assertNotIn("at=la-bahia", html)
+
+    def test_posting_a_blank_releases_the_card(self) -> None:
+        self.tag.location = self.location
+        self.tag.save()
+        self.client.force_login(self.staff)
+        self.client.post(f"/q/{self.tag.token}/assign/", {"location": ""})
+        self.tag.refresh_from_db()
+        self.assertIsNone(self.tag.location)
+
+    def test_assigning_is_staff_only(self) -> None:
+        response = self.client.post(f"/q/{self.tag.token}/assign/", {"location": self.location.pk})
+        self.assertEqual(response.status_code, 302)  # to the admin login
+        self.tag.refresh_from_db()
+        self.assertIsNone(self.tag.location)
+
+
+class QrBatchPdfTests(TestCase):
+    """The printable sheet."""
+
+    def setUp(self) -> None:
+        self.batch = QrBatch.objects.create(label="Bayahibe, August")
+        QrTag.mint(3, batch=self.batch)
+        User = get_user_model()
+        self.staff = User.objects.create_user("staffer", password="pw", is_staff=True)
+
+    @override_settings(ALLOWED_HOSTS=["testserver"])
+    def test_it_renders_a_pdf_for_staff(self) -> None:
+        self.client.force_login(self.staff)
+        response = self.client.get(f"/qr-batch/{self.batch.pk}.pdf")
+        self.assertEqual(response["Content-Type"], "application/pdf")
+        self.assertTrue(response.content.startswith(b"%PDF-"))
+        self.assertIn(f"qr-batch-{self.batch.pk}.pdf", response["Content-Disposition"])
+
+    @override_settings(ALLOWED_HOSTS=["testserver"])
+    def test_it_is_staff_only(self) -> None:
+        self.assertEqual(self.client.get(f"/qr-batch/{self.batch.pk}.pdf").status_code, 302)
+
+    def test_an_empty_batch_still_produces_a_valid_pdf(self) -> None:
+        # A zero-byte response reads to the browser as a corrupt download.
+        body = qr_pdf.batch_pdf_bytes([], title="empty")
+        self.assertTrue(body.startswith(b"%PDF-"))
+
+    def test_every_card_encodes_its_own_absolute_url(self) -> None:
+        # A card printed with the wrong host is landfill, so the URL has to
+        # come from the request rather than from a constant.
+        self.client.force_login(self.staff)
+        with patch("concierge.qr_pdf.batch_pdf_bytes", return_value=b"%PDF-fake") as render:
+            self.client.get(f"/qr-batch/{self.batch.pk}.pdf")
+        cards = render.call_args[0][0]
+        tokens = {tag.token for tag in self.batch.tags.all()}
+        self.assertEqual({token for token, _ in cards}, tokens)
+        for token, url in cards:
+            self.assertEqual(url, f"http://testserver/q/{token}")
+
+    def test_print_settings_stay_scannable(self) -> None:
+        # Same recovery level and quiet zone as the per-venue codes; a card
+        # gets handled, taped and rained on.
+        self.assertEqual(qr_pdf.BAR_LEVEL, "Q")
+        self.assertGreaterEqual(qr_pdf.BAR_BORDER, 4)
+
+    def test_the_pdf_encoder_agrees_with_the_svg_one(self) -> None:
+        """The sheet is drawn by reportlab, not by `qrcode` — prove they agree.
+
+        Two libraries encoding the same URL is the risk this feature runs: a
+        card that renders beautifully and scans to the wrong place is only
+        discovered after the print run. The two differ in which mask pattern
+        they pick (both valid), so compare against every mask rather than the
+        default one.
+        """
+        from reportlab.graphics.barcode.qr import QrCodeWidget
+
+        url = "https://bookyourtickets.online/q/K7M2P0"
+        widget = QrCodeWidget(url, barLevel=qr_pdf.BAR_LEVEL, barBorder=qr_pdf.BAR_BORDER)
+        widget.qr.make()
+        size = widget.qr.getModuleCount()
+        theirs = [[bool(widget.qr.isDark(r, c)) for c in range(size)] for r in range(size)]
+
+        border = qr.BORDER
+        for mask in range(8):
+            code = qrcode.QRCode(
+                error_correction=qr.ERROR_CORRECTION, border=border, mask_pattern=mask
+            )
+            code.add_data(url)
+            code.make(fit=True)
+            matrix = code.get_matrix()
+            ours = [[bool(cell) for cell in row[border:-border]] for row in matrix[border:-border]]
+            if ours == theirs:
+                return
+        self.fail("reportlab's QR does not match the qrcode library's under any mask pattern")
+
+
+# The admin templates load hashed static files, and WhiteNoise's manifest
+# storage refuses to serve anything collectstatic has not seen. Rendering an
+# admin page in tests is new here, so swap in the plain storage rather than
+# making the suite depend on a build step.
+@override_settings(
+    ALLOWED_HOSTS=["testserver"],
+    STORAGES={
+        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    },
+)
+class QrAdminTests(TestCase):
+    """The desk flow: make a batch, print it, assign the cards."""
+
+    def setUp(self) -> None:
+        User = get_user_model()
+        self.admin = User.objects.create_superuser("boss", "boss@example.com", "pw")
+        self.client.force_login(self.admin)
+
+    def test_creating_a_batch_mints_that_many_cards(self) -> None:
+        self.client.post(
+            "/admin/concierge/qrbatch/add/",
+            {"label": "Bayahibe, August", "notes": "", "card_count": 5},
+        )
+        batch = QrBatch.objects.get(label="Bayahibe, August")
+        self.assertEqual(batch.tags.count(), 5)
+        self.assertEqual(batch.tags.filter(location__isnull=True).count(), 5)
+
+    def test_a_batch_can_be_topped_up_without_losing_its_cards(self) -> None:
+        batch = QrBatch.objects.create(label="Run one")
+        QrTag.mint(2, batch=batch)
+        original = set(batch.tags.values_list("token", flat=True))
+
+        self.client.post(
+            f"/admin/concierge/qrbatch/{batch.pk}/change/",
+            {"label": "Run one", "notes": "", "card_count": 3},
+        )
+        self.assertEqual(batch.tags.count(), 5)
+        self.assertTrue(original <= set(batch.tags.values_list("token", flat=True)))
+
+    def test_the_changelists_render(self) -> None:
+        QrTag.mint(2, batch=QrBatch.objects.create(label="Run"))
+        self.assertEqual(self.client.get("/admin/concierge/qrbatch/").status_code, 200)
+        self.assertEqual(self.client.get("/admin/concierge/qrtag/").status_code, 200)
+
+    def test_unassigned_cards_can_be_filtered(self) -> None:
+        batch = QrBatch.objects.create(label="Run")
+        tags = QrTag.mint(2, batch=batch)
+        tags[0].location = Location.objects.create(name="Bahía", slug="bahia")
+        tags[0].save()
+
+        html = self.client.get("/admin/concierge/qrtag/?assigned=no").content.decode()
+        self.assertIn(tags[1].token, html)
+        self.assertNotIn(tags[0].token, html)
+
+    def test_a_token_can_be_looked_up_in_lower_case(self) -> None:
+        # You are reading it off a card and typing it into a search box.
+        tag = QrTag.mint(1)[0]
+        html = self.client.get(f"/admin/concierge/qrtag/?q={tag.token.lower()}").content.decode()
+        self.assertIn(tag.token, html)
+
+    def test_cards_cannot_be_added_outside_a_batch(self) -> None:
+        # Otherwise a card exists with no print sheet it belongs to.
+        self.assertEqual(self.client.get("/admin/concierge/qrtag/add/").status_code, 403)
 
 
 @override_settings(ALLOWED_HOSTS=["testserver"], WHATSAPP_BUSINESS_NUMBER="573222448409")

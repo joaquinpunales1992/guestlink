@@ -25,9 +25,27 @@ def normalize_phone(phone: str) -> str:
     return f"+{digits}" if digits else ""
 
 
+# no 0/O/1/I to avoid confusion in chat, and — for QR tags — when read off a
+# printed card by eye.
+CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
+
 def _generate_short_code() -> str:
-    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"  # no 0/O/1/I to avoid confusion in chat
-    return "".join(secrets.choice(alphabet) for _ in range(5))
+    return "".join(secrets.choice(CODE_ALPHABET) for _ in range(5))
+
+
+def _unique_qr_token() -> str:
+    """A token no existing card carries.
+
+    The unique constraint is the real guarantee; this just avoids handing the
+    database a duplicate in the first place. Bounded because an unbounded retry
+    on a full keyspace would hang the request rather than fail it.
+    """
+    for _ in range(20):
+        token = "".join(secrets.choice(CODE_ALPHABET) for _ in range(QrTag.TOKEN_LENGTH))
+        if not QrTag.objects.filter(token=token).exists():
+            return token
+    raise RuntimeError("Could not find an unused QR token after 20 attempts.")
 
 
 class Service(models.Model):
@@ -233,6 +251,97 @@ class Location(models.Model):
         """Active services for this venue — all of them when none are chosen."""
         chosen = self.services.filter(active=True)
         return chosen if chosen.exists() else Service.objects.filter(active=True)
+
+
+class QrBatch(models.Model):
+    """One print run of blank QR cards.
+
+    Grouping them means a run can be reprinted identically, and a card found
+    loose in a drawer can be traced back to when it was made.
+    """
+
+    label = models.CharField(
+        max_length=80, help_text="What to call this run, e.g. “Bayahibe restaurants, August”."
+    )
+    notes = models.TextField(blank=True, help_text="Internal — who printed it, what stock, where they went.")
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ("-created_at",)
+        verbose_name_plural = "QR batches"
+
+    def __str__(self) -> str:
+        return self.label
+
+
+class QrTag(models.Model):
+    """One printed QR card, whose venue is decided after the ink is dry.
+
+    A location's own /<slug> code has to be printed per venue, because the slug
+    is in the ink — which is also why changing a slug orphans printed cards.
+    This carries an opaque token instead and keeps the token→location mapping
+    in the database, so a stack of identical-looking cards can be printed in
+    advance and assigned as they are placed. The same property makes a card
+    reassignable: when a venue drops out, re-point its card instead of
+    reprinting.
+    """
+
+    # Six characters from the unambiguous alphabet — 1.07 billion combinations,
+    # so collisions are a formality, and no 0/O/1/I to misread off a card.
+    TOKEN_LENGTH = 6
+
+    token = models.CharField(
+        max_length=12,
+        unique=True,
+        editable=False,
+        help_text="Printed on the card. This is what the QR encodes; it never changes.",
+    )
+    batch = models.ForeignKey(
+        QrBatch, on_delete=models.SET_NULL, null=True, blank=True, related_name="tags"
+    )
+    # SET_NULL, not CASCADE: deleting a venue must not delete the record of a
+    # card that physically exists. It becomes unassigned and can be reused.
+    location = models.ForeignKey(
+        Location,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="qr_tags",
+        help_text="Where this card is stuck. Blank means it is still unassigned.",
+    )
+    assigned_at = models.DateTimeField(null=True, blank=True, editable=False)
+    created_at = models.DateTimeField(default=timezone.now)
+
+    class Meta:
+        ordering = ("token",)
+        verbose_name = "QR tag"
+
+    def __str__(self) -> str:
+        return f"{self.token} → {self.location.name if self.location else 'unassigned'}"
+
+    def save(self, *args, **kwargs):
+        if not self.token:
+            self.token = _unique_qr_token()
+        # Kept in step with the FK wherever it is set — the admin's inline
+        # editing and the scan-to-assign screen both go through save().
+        if self.location_id and self.assigned_at is None:
+            self.assigned_at = timezone.now()
+        elif not self.location_id:
+            self.assigned_at = None
+        return super().save(*args, **kwargs)
+
+    @property
+    def is_assigned(self) -> bool:
+        return self.location_id is not None
+
+    def path(self) -> str:
+        """The path the QR encodes. No trailing slash, as with location codes."""
+        return f"/q/{self.token}"
+
+    @classmethod
+    def mint(cls, count: int, batch: "QrBatch | None" = None) -> list:
+        """Create `count` fresh unassigned cards."""
+        return [cls.objects.create(batch=batch) for _ in range(max(0, count))]
 
 
 class LocationEvent(models.Model):

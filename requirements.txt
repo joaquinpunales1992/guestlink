@@ -16,6 +16,11 @@ pillow>=10.0.0,<12.0.0
 # QR codes for each location's landing page. Pure Python; renders SVG on its
 # own and PNG via Pillow, which is already a dependency.
 qrcode>=7.4,<9.0
+
+# Batch QR sheets as printable A4 PDFs. Capped below 4.5 for Python 3.9, and
+# imported lazily in qr_pdf.py so a server that has not run pip install yet
+# loses the print sheet rather than the whole site.
+reportlab>=4.0,<4.5
 whitenoise>=6.6,<7.0
 python-dotenv>=1.0.0
 requests>=2.31.0

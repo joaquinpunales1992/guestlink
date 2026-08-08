@@ -8,6 +8,8 @@ from django.utils import timezone
 from django.urls import reverse
 from django.utils.html import format_html
 
+from django import forms
+
 from .models import (
     Commission,
     Guest,
@@ -15,6 +17,8 @@ from .models import (
     LocationEvent,
     Message,
     Provider,
+    QrBatch,
+    QrTag,
     Service,
     SiteSettings,
     Ticket,
@@ -233,6 +237,120 @@ class ServiceAdmin(admin.ModelAdmin):
             )
         if done:
             self.message_user(request, f"{done} image(s) fetched.")
+
+
+class QrBatchForm(forms.ModelForm):
+    """Adding a batch is really "print me N blank cards"."""
+
+    card_count = forms.IntegerField(
+        min_value=0,
+        max_value=500,
+        initial=24,
+        required=False,
+        label="Cards to create",
+        help_text=(
+            "How many blank cards this run contains. They are created unassigned — "
+            "print the PDF, then assign each card as you place it. Adding more later "
+            "tops the batch up rather than replacing it."
+        ),
+    )
+
+    class Meta:
+        model = QrBatch
+        fields = ("label", "notes")
+
+
+@admin.register(QrBatch)
+class QrBatchAdmin(admin.ModelAdmin):
+    """Print runs of blank cards."""
+
+    form = QrBatchForm
+    list_display = ("label", "card_total", "assigned_total", "print_link", "created_at")
+    search_fields = ("label", "notes")
+    readonly_fields = ("created_at", "print_link")
+    fieldsets = (
+        (None, {"fields": ("label", "notes")}),
+        ("Cards", {"fields": ("card_count", "print_link", "created_at")}),
+    )
+
+    def get_queryset(self, request):
+        return super().get_queryset(request).annotate(
+            _cards=Count("tags", distinct=True),
+            _assigned=Count("tags", filter=Q(tags__location__isnull=False), distinct=True),
+        )
+
+    def save_model(self, request, obj, form, change):
+        super().save_model(request, obj, form, change)
+        count = form.cleaned_data.get("card_count") or 0
+        if count:
+            QrTag.mint(count, batch=obj)
+            self.message_user(request, f"{count} blank card(s) created. Use “Print PDF” to print them.")
+
+    @admin.display(description="cards", ordering="_cards")
+    def card_total(self, obj: QrBatch) -> int:
+        return getattr(obj, "_cards", obj.tags.count())
+
+    @admin.display(description="assigned", ordering="_assigned")
+    def assigned_total(self, obj: QrBatch) -> str:
+        total = getattr(obj, "_cards", obj.tags.count())
+        done = getattr(obj, "_assigned", obj.tags.filter(location__isnull=False).count())
+        return f"{done} / {total}"
+
+    @admin.display(description="Print")
+    def print_link(self, obj: QrBatch) -> str:
+        if not obj.pk:
+            return "Save the batch first, then the print sheet appears here."
+        return format_html(
+            '<a class="button" href="{}">Print PDF</a> '
+            '<span style="color:#666">— A4, 12 cards per sheet, with cut marks.</span>',
+            reverse("qr_batch_pdf", args=[obj.pk]),
+        )
+
+
+class AssignedFilter(admin.SimpleListFilter):
+    """The question actually asked of this list: what is still in the drawer?"""
+
+    title = "assignment"
+    parameter_name = "assigned"
+
+    def lookups(self, request, model_admin):
+        return (("no", "Unassigned"), ("yes", "Assigned"))
+
+    def queryset(self, request, queryset):
+        if self.value() == "no":
+            return queryset.filter(location__isnull=True)
+        if self.value() == "yes":
+            return queryset.filter(location__isnull=False)
+        return queryset
+
+
+@admin.register(QrTag)
+class QrTagAdmin(admin.ModelAdmin):
+    """Individual printed cards. Assign them here, or by scanning one."""
+
+    list_display = ("token", "location", "batch", "assigned_at", "scan_link")
+    # The desk flow: filter to Unassigned, set several locations, save once.
+    list_editable = ("location",)
+    list_filter = (AssignedFilter, "batch", "location")
+    search_fields = ("token",)
+    readonly_fields = ("token", "assigned_at", "created_at", "scan_link")
+    fields = ("token", "location", "batch", "scan_link", "assigned_at", "created_at")
+
+    def get_search_results(self, request, queryset, search_term):
+        # Tokens are printed and stored uppercase; typing one off a card in
+        # lower case should still find it.
+        return super().get_search_results(request, queryset, (search_term or "").upper())
+
+    @admin.display(description="opens")
+    def scan_link(self, obj: QrTag) -> str:
+        if not obj.pk:
+            return "—"
+        return format_html('<a href="{}" target="_blank">{}</a>', obj.path(), obj.path())
+
+    def has_add_permission(self, request) -> bool:
+        # Cards come from a batch, so the print sheet and the tokens can never
+        # drift apart. A one-off card is a batch of one.
+        return False
 
 
 @admin.register(Location)

@@ -17,6 +17,14 @@ urlpatterns = [
     path("go/<slug:service_slug>/", concierge_views.go, name="go"),
     # Staff-only, and declared before the location catch-all below.
     path("qr/<slug:slug>.<str:fmt>", concierge_views.location_qr, name="location_qr"),
+    path("qr-batch/<int:pk>.pdf", concierge_views.qr_batch_pdf, name="qr_batch_pdf"),
+    # Pre-printed cards. The token is in the ink and the venue is not, so these
+    # resolve through the database rather than through the URL. No trailing
+    # slash on the scan route: it is what gets printed, and APPEND_SLASH would
+    # otherwise 301 before the page renders.
+    path("q/<str:token>/assign/", concierge_views.tag_assign, name="tag_assign"),
+    path("q/<str:token>/", concierge_views.tag_landing, name="tag_landing_slash"),
+    path("q/<str:token>", concierge_views.tag_landing, name="tag_landing"),
 ]
 
 # Every QR code points at /<location-slug>. These come last so the fixed routes

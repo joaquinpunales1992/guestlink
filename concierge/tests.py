@@ -1055,6 +1055,20 @@ class PrivacyPolicyAccuracyTests(TestCase):
         # And it must still be honest about what is NOT stored.
         self.assertIn("no IP address", html)
 
+    @override_settings(ALLOWED_HOSTS=["testserver"], WHATSAPP_BUSINESS_NUMBER="+573222448409")
+    def test_the_hosts_personal_number_never_reaches_the_page(self) -> None:
+        # The WhatsApp line is the host's own; the policy speaks for the
+        # service. Checking the raw HTML, not the visible text — a wa.me href
+        # would hide the digits from a reader and still hand them to a scraper.
+        html = self.client.get("/privacy/").content.decode()
+        self.assertNotIn("573222448409", html)
+        self.assertNotIn("wa.me", html)
+
+    @override_settings(ALLOWED_HOSTS=["testserver"], PRIVACY_CONTACT_EMAIL="hola@example.com")
+    def test_a_configured_email_becomes_the_contact_route(self) -> None:
+        html = self.client.get("/privacy/").content.decode()
+        self.assertIn("mailto:hola@example.com", html)
+
 
 class LocationQrTests(TestCase):
     """A printable QR per venue, generated from its landing URL."""

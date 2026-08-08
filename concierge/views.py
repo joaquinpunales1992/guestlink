@@ -221,9 +221,10 @@ def privacy(request: HttpRequest) -> HttpResponse:
         request,
         "concierge/privacy.html",
         {
-            # Deliberately no personal name: the policy speaks for the service,
-            # not for an individual.
-            "business_number": (settings.WHATSAPP_BUSINESS_NUMBER or "").lstrip("+"),
+            # Deliberately no personal name and no phone number: the policy
+            # speaks for the service, not for an individual, and the WhatsApp
+            # number is the host's personal line. It is not passed to the
+            # template at all so it cannot reach the page source either.
             "contact_email": settings.PRIVACY_CONTACT_EMAIL,
             "last_updated": "7 August 2026",
         },

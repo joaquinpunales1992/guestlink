@@ -153,14 +153,11 @@
     <div class="card">
       <h2>Contact</h2>
       <p>
-        For anything about this policy or your information, message
-        {% if business_number %}
-          <a href="https://wa.me/{{ business_number }}" rel="noopener">+{{ business_number }}</a> on WhatsApp{% if contact_email %},
-          or email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>{% endif %}.
-        {% elif contact_email %}
-          <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.
+        For anything about this policy or your information,
+        {% if contact_email %}
+          email <a href="mailto:{{ contact_email }}">{{ contact_email }}</a>.
         {% else %}
-          us directly.
+          message us directly.
         {% endif %}
       </p>
     </div>

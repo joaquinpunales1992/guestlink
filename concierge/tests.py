@@ -2223,6 +2223,22 @@ class DepositAdminTests(TestCase):
             )
         capture.assert_not_called()
 
+    def test_the_change_form_offers_the_capture_page(self) -> None:
+        """The capture page is reachable only from here, so the link must render."""
+        html = self.client.get(
+            f"/admin/concierge/damagedeposit/{self.deposit.pk}/change/"
+        ).content.decode()
+        self.assertIn(f"/{self.deposit.pk}/capture/", html)
+        self.assertIn("Charge for damage", html)
+
+    def test_no_capture_link_when_nothing_is_held(self) -> None:
+        self.deposit.status = DamageDeposit.Status.RELEASED
+        self.deposit.save()
+        html = self.client.get(
+            f"/admin/concierge/damagedeposit/{self.deposit.pk}/change/"
+        ).content.decode()
+        self.assertNotIn("Charge for damage", html)
+
     def test_capture_is_staff_only(self) -> None:
         self.client.logout()
         response = self.client.post(

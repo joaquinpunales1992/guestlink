@@ -1,0 +1,18 @@
+{% extends "admin/change_form.html" %}
+
+{# The capture page is reachable only from here. DamageDepositAdmin.change_view
+   puts `capture_url` in the context exactly when a hold is live, so the button
+   cannot appear for a deposit with nothing to charge against. #}
+
+{% block object-tools-items %}
+  {% if capture_url %}
+    <li>
+      <a href="{{ capture_url }}" class="addlink"
+         style="background:#b3261e;border-color:#b3261e"
+         title="Capture part or all of the hold, for damage actually found">
+        Charge for damage
+      </a>
+    </li>
+  {% endif %}
+  {{ block.super }}
+{% endblock %}

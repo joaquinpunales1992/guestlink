@@ -26,6 +26,27 @@ PROBES = [
 ]
 
 
+def paypal_probe():
+    """The PayPal host this install would actually talk to.
+
+    Resolved at run time rather than listed above because it depends on
+    PAYPAL_ENV — probing the live host while the server is configured for
+    sandbox would prove nothing about the calls it will really make.
+
+    Worth probing at all because a blocked egress here fails the same silent
+    way the relay does: the deposit page renders, the guest taps the button,
+    and the hold is never placed.
+    """
+    from concierge import paypal
+
+    base = paypal.api_base()
+    host = base.split("//", 1)[1]
+    label = f"PayPal ({'live' if paypal.is_live() else 'sandbox'})"
+    # /v1/oauth2/token rejects a GET, which is all this needs: any HTTP
+    # response proves the egress path works.
+    return (label, f"{base}/v1/oauth2/token", host)
+
+
 class Command(BaseCommand):
     help = "Verify the server can actually run guestlink (config + outbound network)."
 
@@ -150,7 +171,7 @@ class Command(BaseCommand):
         except ImportError:  # pragma: no cover - dependency is declared
             return self._bad("requests is not installed")
 
-        for label, url, host in PROBES:
+        for label, url, host in PROBES + [paypal_probe()]:
             try:
                 socket.getaddrinfo(host, 443)
             except socket.gaierror as exc:

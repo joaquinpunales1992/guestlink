@@ -58,9 +58,82 @@ uv run python manage.py test concierge
 | WhatsApp send | Dry-run logs to console | No business number yet. Flip `WHATSAPP_DRY_RUN=0` once Cloud API creds are in `.env`. |
 | Claude classifier | Falls back to keyword matching | Works without `ANTHROPIC_API_KEY`. Set the key to use Claude Haiku 4.5. |
 | Multi-host | Single host hardcoded via env (`HOST_NAME`, `HOST_APARTMENT_LABEL`) | v1 is laboratory only. Multi-host comes after we validate the model. |
-| Payments | Not handled | The `expected_commission_usd` field is informational; reconciliation is manual via admin. |
+| Payments | Commissions not handled; damage deposits are | `expected_commission_usd` is informational and reconciled manually. Damage deposits go through PayPal — see "Damage deposits" below. |
 | Auth on landing page | None | Public URL behind the QR is acceptable for v1. |
 | Translation | EN/ES toggle on landing only | If a guest writes in DE/FR, the provider has to manage. Classifier still parses the language tag. |
+
+## Damage deposits
+
+A refundable hold on the guest's card, for bookings that come in through
+Booking.com. You create one in the admin, paste the link into the Booking.com
+message thread, and the guest approves it on PayPal's own page — no card
+details ever reach this server.
+
+```
+admin → new Damage deposit  →  copy /deposit/<token>/  →  paste into Booking.com
+                                        ↓
+                guest opens it, approves in PayPal (intent=AUTHORIZE)
+                                        ↓
+                       funds HELD on their card — nothing charged
+                                        ↓
+     clean checkout → "Release the hold"        damage → "Charge for damage"
+          (voids it, guest pays nothing)      (captures up to the held amount)
+```
+
+### PayPal's clock, which shapes everything here
+
+PayPal has no "reserve some money" primitive. What it has is the
+authorize/capture flow built for shipping goods, and this bends it to a
+deposit. The consequences are not optional:
+
+| | |
+| --- | --- |
+| **3 days** | The honor period — PayPal *guarantees* a capture will succeed. |
+| **29 days** | The hold expires completely. Nothing can be captured after it. |
+| **Reauthorize** | Between those, mints a fresh hold and restarts the 3 days. |
+| **Ceiling** | You can never capture more than the amount held. |
+
+So: **create the deposit close to check-in**, not when the booking lands. A
+stay longer than four weeks cannot be covered by a single hold. The admin's
+"hold expires" column turns red when a hold would die before check-out, which
+is the quiet failure this feature is most likely to hit.
+
+### Setup
+
+1. `developer.paypal.com` → Apps & Credentials → **Sandbox** → create an app.
+2. Put the client id and secret in `.env` with `PAYPAL_ENV=sandbox`.
+3. Admin → Site settings → Damage deposits → set the amount (0 turns the
+   feature off) and edit the wording the guest sees.
+4. Create a deposit, open its link, and run a sandbox hold all the way through
+   — place it, reauthorize it, release it, and capture one.
+5. Only then repeat step 1 under **Live** and set `PAYPAL_ENV=live`.
+
+The deposit page shows a loud TEST MODE banner whenever `PAYPAL_ENV` is not
+`live`, and every deposit records which environment it was created in, so a
+sandbox hold can never be mistaken for a real one.
+
+### Keeping holds honest
+
+PayPal expires holds on its own schedule and never tells this app, so a
+deposit reading "held" in the admin may be holding nothing. Run daily:
+
+```bash
+uv run python manage.py sync_deposits              # reconcile and report
+uv run python manage.py sync_deposits --reauthorize  # also renew stale holds
+```
+
+### Before you use this for real
+
+- **Declare the deposit in your Booking.com listing policies.** Booking.com
+  expects a damage deposit to be published as a property policy with its
+  amount and method. Asking for one that is not in the listing is what gets
+  bookings cancelled and accounts penalised.
+- **A security deposit has no PayPal seller protection.** If a guest disputes
+  a capture, PayPal decides on the evidence you can produce — photos, dated,
+  plus the message where you told the guest.
+- Confirm your Business account is enabled for Authorization & Capture. If
+  PayPal has you on capture-only, the hold returns an error and the deposit
+  is marked failed with PayPal's reason attached.
 
 ## Going live (the order matters)
 
@@ -92,12 +165,13 @@ guestlink/
 ├── guestlink/settings.py        # env-driven config
 ├── guestlink/urls.py            # landing, webhook, admin, healthz
 ├── concierge/
-│   ├── models.py                # Service, Provider, Guest, Ticket, Message
+│   ├── models.py                # Service, Provider, Guest, Ticket, Message, DamageDeposit
 │   ├── admin.py                 # full-featured admin with inlines + actions
 │   ├── classifier.py            # Claude / keyword classifier for first messages
 │   ├── relay.py                 # the routing brain (handle_inbound)
 │   ├── whatsapp.py              # Cloud API client (honors WHATSAPP_DRY_RUN)
-│   ├── views.py                 # webhook + landing
+│   ├── paypal.py                # PayPal auth/capture client (damage deposits)
+│   ├── views.py                 # webhook + landing + deposit page
 │   ├── templates/concierge/landing.html
 │   ├── management/commands/seed_demo.py
 │   └── tests.py                 # relay routing smoke tests

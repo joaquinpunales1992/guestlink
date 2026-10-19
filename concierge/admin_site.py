@@ -24,7 +24,7 @@ from django.urls import reverse
 SECTIONS = (
     ("Guest-facing", ("Location", "Service")),
     ("QR cards", ("QrBatch", "QrTag")),
-    ("Bookings & money", ("Ticket", "Commission", "Provider")),
+    ("Bookings & money", ("Ticket", "Commission", "DamageDeposit", "Provider")),
     ("Records", ("Guest", "Message", "LocationEvent")),
     ("Settings", ("SiteSettings", "User", "Group")),
 )

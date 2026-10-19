@@ -1,0 +1,249 @@
+<!doctype html>
+<html lang="{{ lang }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% if lang == "es" %}Depósito de garantía{% elif lang == "fr" %}Caution{% else %}Security deposit{% endif %} · {{ deposit.guest_name }}</title>
+  <style>
+    :root {
+      --petrol: #0d4650; --sea: #17727f; --cream: #f6efe2; --ink: #143840;
+      --muted: #5f7b81; --terracotta: #d9694a; --green: #1a7f4b;
+      --border: rgba(13, 70, 80, 0.14);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0; color: var(--ink); background: var(--cream);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    .hero {
+      background: linear-gradient(165deg, var(--sea) 0%, var(--petrol) 100%);
+      color: #fff; padding: 30px 22px; text-align: center;
+    }
+    .hero .eyebrow {
+      margin: 0 0 10px; font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase;
+      color: rgba(255,255,255,0.72);
+    }
+    .hero h1 { margin: 0; font-size: 26px; font-weight: 600; letter-spacing: -0.01em; }
+    .amount { margin: 14px 0 0; font-size: 40px; font-weight: 700; letter-spacing: -0.02em; }
+    .amount small { display: block; font-size: 13px; font-weight: 500; opacity: 0.8; letter-spacing: 0; }
+    main { max-width: 480px; margin: 0 auto; padding: 22px 22px 48px; }
+    .card {
+      background: #fff; border: 1px solid var(--border); border-radius: 14px;
+      padding: 20px; margin-bottom: 16px;
+    }
+    .card h2 { margin: 0 0 12px; font-size: 15px; font-weight: 600; }
+    dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 8px 16px; font-size: 14px; }
+    dt { color: var(--muted); }
+    dd { margin: 0; font-weight: 600; text-align: right; }
+    .terms { font-size: 14px; line-height: 1.6; color: var(--ink); white-space: pre-line; }
+    .points { margin: 14px 0 0; padding: 0; list-style: none; font-size: 13.5px; line-height: 1.55; }
+    .points li { position: relative; padding-left: 24px; margin-bottom: 9px; color: var(--muted); }
+    .points li::before {
+      content: "✓"; position: absolute; left: 4px; top: 0; color: var(--green); font-weight: 700;
+    }
+    .status {
+      padding: 13px 15px; border-radius: 10px; font-size: 14px; line-height: 1.5;
+      margin-bottom: 16px; border: 1px solid var(--border);
+      background: rgba(23, 114, 127, 0.09);
+    }
+    .status.good { background: rgba(26, 127, 75, 0.10); border-color: rgba(26,127,75,0.3); }
+    .status.warn { background: rgba(217, 105, 74, 0.12); border-color: rgba(217,105,74,0.35); }
+    .status strong { display: block; margin-bottom: 3px; }
+    .sandbox {
+      background: var(--terracotta); color: #fff; text-align: center;
+      padding: 9px 14px; font-size: 13px; font-weight: 600;
+    }
+    footer { text-align: center; font-size: 12px; color: var(--muted); line-height: 1.6; }
+    footer a { color: var(--sea); }
+    #paypal-button-container { min-height: 52px; }
+    .spinner { text-align: center; color: var(--muted); font-size: 14px; padding: 14px; }
+  </style>
+</head>
+<body>
+  {% if sandbox %}
+    <div class="sandbox">TEST MODE — PayPal sandbox. No real money is involved.</div>
+  {% endif %}
+
+  <div class="hero">
+    <p class="eyebrow">
+      {% if lang == "es" %}Depósito de garantía{% elif lang == "fr" %}Caution de séjour{% else %}Security deposit{% endif %}
+    </p>
+    <h1>{{ deposit.guest_name }}</h1>
+    <p class="amount">
+      {{ deposit.currency }} {{ deposit.amount|floatformat:2 }}
+      <small>
+        {% if lang == "es" %}reservado, no cobrado{% elif lang == "fr" %}réservé, non débité{% else %}held, not charged{% endif %}
+      </small>
+    </p>
+  </div>
+
+  <main>
+    {% if already_held %}
+      <div class="status good">
+        <strong>
+          {% if lang == "es" %}Listo — tu depósito está reservado.{% elif lang == "fr" %}C'est fait — votre caution est réservée.{% else %}Done — your deposit is held.{% endif %}
+        </strong>
+        {% if lang == "es" %}
+          No se ha cobrado nada. Puedes cerrar esta página.
+        {% elif lang == "fr" %}
+          Rien n'a été débité. Vous pouvez fermer cette page.
+        {% else %}
+          Nothing has been charged. You can close this page.
+        {% endif %}
+      </div>
+    {% elif deposit.status == "released" %}
+      <div class="status good">
+        <strong>
+          {% if lang == "es" %}Depósito liberado.{% elif lang == "fr" %}Caution libérée.{% else %}Deposit released.{% endif %}
+        </strong>
+        {% if lang == "es" %}No se cobró nada. Gracias por tu estancia.{% elif lang == "fr" %}Rien n'a été débité. Merci de votre séjour.{% else %}Nothing was charged. Thank you for your stay.{% endif %}
+      </div>
+    {% elif deposit.status == "claimed" or deposit.status == "expired" %}
+      <div class="status">
+        {% if lang == "es" %}Este depósito ya está cerrado. Contacta con tu anfitrión si tienes dudas.{% elif lang == "fr" %}Cette caution est clôturée. Contactez votre hôte pour toute question.{% else %}This deposit is closed. Contact your host if you have questions.{% endif %}
+      </div>
+    {% endif %}
+
+    <div class="card">
+      <h2>{% if lang == "es" %}Tu reserva{% elif lang == "fr" %}Votre réservation{% else %}Your booking{% endif %}</h2>
+      <dl>
+        <dt>{% if lang == "es" %}Huésped{% elif lang == "fr" %}Voyageur{% else %}Guest{% endif %}</dt>
+        <dd>{{ deposit.guest_name }}</dd>
+        {% if deposit.booking_reference %}
+          <dt>{% if lang == "es" %}Reserva{% elif lang == "fr" %}Réservation{% else %}Booking{% endif %}</dt>
+          <dd>{{ deposit.booking_reference }}</dd>
+        {% endif %}
+        {% if deposit.location %}
+          <dt>{% if lang == "es" %}Alojamiento{% elif lang == "fr" %}Logement{% else %}Property{% endif %}</dt>
+          <dd>{{ deposit.location.name }}</dd>
+        {% endif %}
+        {% if deposit.check_in %}
+          <dt>{% if lang == "es" %}Entrada{% elif lang == "fr" %}Arrivée{% else %}Check-in{% endif %}</dt>
+          <dd>{{ deposit.check_in|date:"j M Y" }}</dd>
+        {% endif %}
+        {% if deposit.check_out %}
+          <dt>{% if lang == "es" %}Salida{% elif lang == "fr" %}Départ{% else %}Check-out{% endif %}</dt>
+          <dd>{{ deposit.check_out|date:"j M Y" }}</dd>
+        {% endif %}
+      </dl>
+    </div>
+
+    <div class="card">
+      <h2>{% if lang == "es" %}Cómo funciona{% elif lang == "fr" %}Comment ça marche{% else %}How this works{% endif %}</h2>
+      {% if terms %}<p class="terms">{{ terms }}</p>{% endif %}
+      <ul class="points">
+        <li>
+          {% if lang == "es" %}PayPal reserva el importe. No es un cobro.{% elif lang == "fr" %}PayPal réserve le montant. Ce n'est pas un débit.{% else %}PayPal reserves the amount. It is not a charge.{% endif %}
+        </li>
+        <li>
+          {% if lang == "es" %}Nunca vemos los datos de tu tarjeta.{% elif lang == "fr" %}Nous ne voyons jamais vos données bancaires.{% else %}We never see your card details.{% endif %}
+        </li>
+        <li>
+          {% if lang == "es" %}Como máximo podemos cobrar {{ deposit.currency }} {{ deposit.amount|floatformat:2 }}.{% elif lang == "fr" %}Nous ne pouvons débiter au maximum que {{ deposit.currency }} {{ deposit.amount|floatformat:2 }}.{% else %}The most we can ever charge is {{ deposit.currency }} {{ deposit.amount|floatformat:2 }}.{% endif %}
+        </li>
+      </ul>
+    </div>
+
+    {% if can_pay %}
+      <div class="card">
+        <h2>{% if lang == "es" %}Autorizar el depósito{% elif lang == "fr" %}Autoriser la caution{% else %}Authorize the deposit{% endif %}</h2>
+        <div id="deposit-error" class="status warn" style="display:none"></div>
+        <div id="paypal-button-container"></div>
+        <div id="deposit-working" class="spinner" style="display:none">
+          {% if lang == "es" %}Reservando…{% elif lang == "fr" %}Réservation en cours…{% else %}Placing the hold…{% endif %}
+        </div>
+      </div>
+    {% elif not already_held and deposit.status != "released" and deposit.status != "claimed" and deposit.status != "expired" %}
+      <div class="status warn">
+        {% if lang == "es" %}Este enlace aún no está listo. Contacta con tu anfitrión.{% elif lang == "fr" %}Ce lien n'est pas encore prêt. Contactez votre hôte.{% else %}This link is not ready yet. Please contact your host.{% endif %}
+      </div>
+    {% endif %}
+
+    <footer>
+      {{ host_name }} · <a href="/privacy/">{% if lang == "es" %}Privacidad{% elif lang == "fr" %}Confidentialité{% else %}Privacy{% endif %}</a>
+      <br>
+      <a href="?lang=en">EN</a> · <a href="?lang=es">ES</a> · <a href="?lang=fr">FR</a>
+    </footer>
+  </main>
+
+  {% if can_pay %}
+    {# intent=authorize is what makes this a hold rather than a payment. #}
+    <script src="https://www.paypal.com/sdk/js?client-id={{ paypal_client_id|urlencode }}&intent=authorize&currency={{ deposit.currency|urlencode }}&components=buttons&disable-funding=paylater,credit"></script>
+    <script>
+      (function () {
+        var csrfToken = "{{ csrf_token }}";
+        var errorBox = document.getElementById("deposit-error");
+        var working = document.getElementById("deposit-working");
+
+        function fail(message) {
+          errorBox.textContent = message;
+          errorBox.style.display = "block";
+          working.style.display = "none";
+        }
+
+        function post(url) {
+          return fetch(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-CSRFToken": csrfToken,
+            },
+            // The token in the URL is the credential; no cookie is needed, and
+            // same-origin keeps it that way if this is ever framed.
+            credentials: "same-origin",
+          }).then(function (response) {
+            return response.json().then(function (data) {
+              if (!response.ok) {
+                throw new Error(data.error || "Something went wrong.");
+              }
+              return data;
+            });
+          });
+        }
+
+        if (!window.paypal) {
+          fail("PayPal could not be loaded. Check your connection and reload.");
+          return;
+        }
+
+        paypal.Buttons({
+          style: { layout: "vertical", color: "blue", shape: "pill", label: "pay" },
+
+          createOrder: function () {
+            errorBox.style.display = "none";
+            return post("{% url 'deposit_create_order' deposit.token %}").then(function (data) {
+              return data.id;
+            });
+          },
+
+          // The hold is placed server-side: the browser only tells us the guest
+          // approved, and the order id we authorize comes from the database.
+          onApprove: function () {
+            working.style.display = "block";
+            return post("{% url 'deposit_authorize' deposit.token %}")
+              .then(function () {
+                window.location.reload();
+              })
+              .catch(function (error) {
+                fail(error.message);
+              });
+          },
+
+          onError: function (error) {
+            fail("PayPal reported a problem. Please try again.");
+            if (window.console) { console.error("[deposit]", error); }
+          },
+
+          onCancel: function () {
+            working.style.display = "none";
+          },
+        }).render("#paypal-button-container").catch(function () {
+          fail("The PayPal button could not be displayed. Please reload the page.");
+        });
+      })();
+    </script>
+  {% endif %}
+</body>
+</html>

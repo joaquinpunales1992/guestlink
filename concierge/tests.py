@@ -6,9 +6,11 @@ messages are still persisted as Message rows, which is what we assert against.
 
 from __future__ import annotations
 
+import datetime
 import html as html_lib
 import importlib
-from io import BytesIO
+import json
+from io import BytesIO, StringIO
 from urllib.parse import parse_qsl, quote, urlparse
 from unittest.mock import Mock, patch
 
@@ -21,12 +23,14 @@ from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError
 from django.core.files.base import ContentFile
 from django.test import RequestFactory, TestCase, override_settings
+from django.utils import timezone
 
 from concierge import qr, qr_pdf
 from concierge.affiliate import is_viator, viator_url
 from concierge.classifier import Classification
 from concierge.models import (
     Commission,
+    DamageDeposit,
     Guest,
     Location,
     LocationEvent,
@@ -1914,3 +1918,491 @@ class ServiceAdminFormTests(TestCase):
 
     def test_the_toggle_script_is_loaded(self) -> None:
         self.assertIn("concierge/admin/service_form.js", list(self.model_admin.media._js))
+
+
+# --- damage deposits ------------------------------------------------------
+
+
+def _authorization(**overrides):
+    """A paypal.Authorization as the client would return it after a hold."""
+    from concierge import paypal as paypal_module
+
+    defaults = dict(
+        id="AUTH-123",
+        status="CREATED",
+        amount=Decimal("300.00"),
+        currency="USD",
+        expires_at=timezone.now() + datetime.timedelta(days=29),
+        raw={},
+    )
+    defaults.update(overrides)
+    return paypal_module.Authorization(**defaults)
+
+
+@override_settings(PAYPAL_CLIENT_ID="test-client", PAYPAL_CLIENT_SECRET="test-secret")
+class DepositPageTests(TestCase):
+    """What the guest sees when they open the link from the Booking.com thread."""
+
+    def setUp(self) -> None:
+        site = SiteSettings.load()
+        site.deposit_amount = Decimal("300.00")
+        site.deposit_terms_en = "Refundable deposit against damage."
+        site.save()
+        self.deposit = DamageDeposit.objects.create(
+            guest_name="Lena Hoffmann",
+            booking_reference="4821993077",
+            amount=Decimal("300.00"),
+            currency="USD",
+        )
+
+    def test_the_page_shows_the_guest_their_own_booking(self) -> None:
+        html = self.client.get(self.deposit.path()).content.decode()
+        self.assertIn("Lena Hoffmann", html)
+        self.assertIn("4821993077", html)
+        self.assertIn("300.00", html)
+
+    def test_it_says_the_card_is_not_charged(self) -> None:
+        html = self.client.get(self.deposit.path()).content.decode()
+        self.assertIn("held, not charged", html)
+        self.assertIn("Refundable deposit against damage.", html)
+
+    def test_an_unknown_token_is_a_404(self) -> None:
+        self.assertEqual(self.client.get("/deposit/nonsense/").status_code, 404)
+
+    def test_the_page_is_not_indexable(self) -> None:
+        # It carries the guest's name and booking reference.
+        html = self.client.get(self.deposit.path()).content.decode()
+        self.assertIn('name="robots" content="noindex, nofollow"', html)
+
+    def test_sandbox_credentials_are_announced_on_the_page(self) -> None:
+        html = self.client.get(self.deposit.path()).content.decode()
+        self.assertIn("TEST MODE", html)
+
+    @override_settings(PAYPAL_ENV="live")
+    def test_live_credentials_show_no_test_banner(self) -> None:
+        html = self.client.get(self.deposit.path()).content.decode()
+        self.assertNotIn("TEST MODE", html)
+
+    @override_settings(PAYPAL_CLIENT_ID="", PAYPAL_CLIENT_SECRET="")
+    def test_without_credentials_the_guest_is_not_shown_a_dead_button(self) -> None:
+        html = self.client.get(self.deposit.path()).content.decode()
+        self.assertNotIn("paypal.com/sdk/js", html)
+        self.assertIn("not ready yet", html)
+
+    def test_a_held_deposit_tells_the_guest_it_is_done(self) -> None:
+        self.deposit.status = DamageDeposit.Status.HELD
+        self.deposit.save()
+        html = self.client.get(self.deposit.path()).content.decode()
+        self.assertIn("your deposit is held", html.lower())
+        self.assertNotIn("paypal.com/sdk/js", html)
+
+    def test_spanish_is_served_when_asked_for(self) -> None:
+        html = self.client.get(f"{self.deposit.path()}?lang=es").content.decode()
+        self.assertIn("reservado, no cobrado", html)
+
+
+@override_settings(PAYPAL_CLIENT_ID="test-client", PAYPAL_CLIENT_SECRET="test-secret")
+class DepositHoldTests(TestCase):
+    """Placing the hold — the two JSON endpoints PayPal's button calls."""
+
+    def setUp(self) -> None:
+        self.deposit = DamageDeposit.objects.create(
+            guest_name="Lena Hoffmann", amount=Decimal("300.00"), currency="USD",
+        )
+
+    def test_creating_an_order_stores_the_id(self) -> None:
+        with patch("concierge.paypal.create_order", return_value={"id": "ORDER-9"}) as create:
+            response = self.client.post(f"{self.deposit.path()}order/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["id"], "ORDER-9")
+        self.deposit.refresh_from_db()
+        self.assertEqual(self.deposit.paypal_order_id, "ORDER-9")
+        # Still nothing held — creating an order reserves no money.
+        self.assertEqual(self.deposit.status, DamageDeposit.Status.DRAFT)
+        self.assertEqual(create.call_args.kwargs["amount"], Decimal("300.00"))
+
+    def test_authorizing_places_the_hold(self) -> None:
+        self.deposit.paypal_order_id = "ORDER-9"
+        self.deposit.save()
+        with patch("concierge.paypal.authorize_order", return_value=_authorization()):
+            response = self.client.post(f"{self.deposit.path()}authorize/")
+        self.assertEqual(response.status_code, 200)
+        self.deposit.refresh_from_db()
+        self.assertEqual(self.deposit.status, DamageDeposit.Status.HELD)
+        self.assertEqual(self.deposit.paypal_authorization_id, "AUTH-123")
+        self.assertIsNotNone(self.deposit.expires_at)
+        self.assertIsNotNone(self.deposit.authorized_at)
+
+    def test_the_order_id_comes_from_the_database_not_the_request(self) -> None:
+        """A forged body must not attach someone else's payment to this deposit."""
+        self.deposit.paypal_order_id = "ORDER-MINE"
+        self.deposit.save()
+        with patch("concierge.paypal.authorize_order", return_value=_authorization()) as authorize:
+            self.client.post(
+                f"{self.deposit.path()}authorize/",
+                data=json.dumps({"orderID": "ORDER-SOMEONE-ELSES"}),
+                content_type="application/json",
+            )
+        authorize.assert_called_once_with("ORDER-MINE")
+
+    def test_a_double_tap_does_not_place_a_second_hold(self) -> None:
+        self.deposit.paypal_order_id = "ORDER-9"
+        self.deposit.save()
+        with patch("concierge.paypal.authorize_order", return_value=_authorization()) as authorize:
+            self.client.post(f"{self.deposit.path()}authorize/")
+            response = self.client.post(f"{self.deposit.path()}authorize/")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(authorize.call_count, 1)
+
+    def test_a_settled_deposit_cannot_be_held_again(self) -> None:
+        self.deposit.status = DamageDeposit.Status.RELEASED
+        self.deposit.save()
+        response = self.client.post(f"{self.deposit.path()}order/")
+        self.assertEqual(response.status_code, 409)
+
+    def test_a_paypal_failure_is_recorded_and_not_leaked_to_the_guest(self) -> None:
+        from concierge.paypal import PayPalError
+
+        error = PayPalError("INSTRUMENT_DECLINED: card refused", debug_id="d-42")
+        with patch("concierge.paypal.create_order", side_effect=error):
+            response = self.client.post(f"{self.deposit.path()}order/")
+
+        self.assertEqual(response.status_code, 502)
+        # The guest is told to retry; PayPal's wording is not repeated to them.
+        self.assertNotIn("INSTRUMENT_DECLINED", response.json()["error"])
+        self.deposit.refresh_from_db()
+        self.assertEqual(self.deposit.status, DamageDeposit.Status.FAILED)
+        # The host keeps the detail, including the id PayPal support asks for.
+        self.assertIn("INSTRUMENT_DECLINED", self.deposit.last_error)
+        self.assertIn("d-42", self.deposit.last_error)
+
+    def test_a_failed_attempt_can_be_retried(self) -> None:
+        self.deposit.status = DamageDeposit.Status.FAILED
+        self.deposit.save()
+        with patch("concierge.paypal.create_order", return_value={"id": "ORDER-2"}):
+            response = self.client.post(f"{self.deposit.path()}order/")
+        self.assertEqual(response.status_code, 200)
+
+    def test_a_zero_amount_deposit_is_refused(self) -> None:
+        self.deposit.amount = Decimal("0")
+        self.deposit.save()
+        response = self.client.post(f"{self.deposit.path()}order/")
+        self.assertEqual(response.status_code, 400)
+
+
+class DepositClockTests(TestCase):
+    """PayPal's 3-day and 29-day windows, which decide when a hold is useful."""
+
+    def setUp(self) -> None:
+        self.deposit = DamageDeposit.objects.create(
+            guest_name="Lena Hoffmann", amount=Decimal("300.00"), currency="USD",
+            status=DamageDeposit.Status.HELD,
+            authorized_at=timezone.now(),
+            expires_at=timezone.now() + datetime.timedelta(days=29),
+        )
+
+    def test_a_fresh_hold_is_inside_the_honor_period(self) -> None:
+        self.assertFalse(self.deposit.needs_reauthorization)
+        self.assertEqual(self.deposit.days_left, 28)  # whole days
+
+    def test_after_three_days_the_hold_wants_reauthorizing(self) -> None:
+        self.deposit.authorized_at = timezone.now() - datetime.timedelta(days=4)
+        self.assertTrue(self.deposit.needs_reauthorization)
+
+    def test_a_deposit_with_nothing_held_has_no_clock(self) -> None:
+        self.deposit.status = DamageDeposit.Status.RELEASED
+        self.assertIsNone(self.deposit.days_left)
+        self.assertFalse(self.deposit.needs_reauthorization)
+
+    def test_a_hold_that_dies_before_check_out_is_flagged(self) -> None:
+        """The quiet failure: it reads as fine and is gone when it is needed."""
+        self.deposit.check_out = (timezone.now() + datetime.timedelta(days=40)).date()
+        self.assertFalse(self.deposit.outlasts_the_stay)
+
+    def test_a_hold_covering_the_stay_is_not_flagged(self) -> None:
+        self.deposit.check_out = (timezone.now() + datetime.timedelta(days=10)).date()
+        self.assertTrue(self.deposit.outlasts_the_stay)
+
+    def test_tokens_are_unguessable_and_unique(self) -> None:
+        other = DamageDeposit.objects.create(guest_name="B", amount=Decimal("1"))
+        self.assertNotEqual(self.deposit.token, other.token)
+        self.assertGreaterEqual(len(self.deposit.token), 20)
+
+    def test_the_environment_is_stamped_so_test_holds_are_obvious(self) -> None:
+        with override_settings(PAYPAL_ENV="live"):
+            live = DamageDeposit.objects.create(guest_name="C", amount=Decimal("1"))
+        self.assertEqual(live.environment, "live")
+        self.assertEqual(self.deposit.environment, "sandbox")
+
+
+# These render real admin pages, which reference admin CSS. The project's
+# manifest storage demands a collectstatic run that a test suite should not
+# need, so plain storage stands in.
+@override_settings(
+    STORAGES={
+        "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+        "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+    }
+)
+class DepositAdminTests(TestCase):
+    """Releasing, reauthorizing and capturing, from the admin."""
+
+    def setUp(self) -> None:
+        User = get_user_model()
+        self.staff = User.objects.create_superuser("boss", "boss@example.com", "pw")
+        self.client.force_login(self.staff)
+        self.deposit = DamageDeposit.objects.create(
+            guest_name="Lena Hoffmann", amount=Decimal("300.00"), currency="USD",
+            status=DamageDeposit.Status.HELD,
+            paypal_authorization_id="AUTH-123",
+            authorized_at=timezone.now(),
+            expires_at=timezone.now() + datetime.timedelta(days=29),
+        )
+
+    def _action(self, name):
+        return self.client.post(
+            "/admin/concierge/damagedeposit/",
+            {"action": name, "_selected_action": [str(self.deposit.pk)]},
+            follow=True,
+        )
+
+    def test_releasing_voids_the_hold(self) -> None:
+        with patch("concierge.paypal.void") as void:
+            self._action("release_holds")
+        void.assert_called_once_with("AUTH-123")
+        self.deposit.refresh_from_db()
+        self.assertEqual(self.deposit.status, DamageDeposit.Status.RELEASED)
+        self.assertIsNotNone(self.deposit.resolved_at)
+
+    def test_a_failed_void_leaves_the_hold_alone(self) -> None:
+        from concierge.paypal import PayPalError
+
+        with patch("concierge.paypal.void", side_effect=PayPalError("nope")):
+            self._action("release_holds")
+        self.deposit.refresh_from_db()
+        # Claiming it was released when PayPal still holds the money would be
+        # the worst possible lie to tell the host.
+        self.assertEqual(self.deposit.status, DamageDeposit.Status.HELD)
+
+    def test_reauthorizing_replaces_the_stored_authorization_id(self) -> None:
+        """The old id is superseded; voiding it later would hit the wrong hold."""
+        fresh = _authorization(id="AUTH-NEW")
+        with patch("concierge.paypal.reauthorize", return_value=fresh):
+            self._action("reauthorize_holds")
+        self.deposit.refresh_from_db()
+        self.assertEqual(self.deposit.paypal_authorization_id, "AUTH-NEW")
+
+    def test_capturing_charges_and_closes_the_deposit(self) -> None:
+        with patch("concierge.paypal.capture", return_value={"id": "CAP-7"}) as capture:
+            self.client.post(
+                f"/admin/concierge/damagedeposit/{self.deposit.pk}/capture/",
+                {"amount": "120.00", "reason": "Broken shower screen", "confirm": "on"},
+            )
+        self.assertEqual(capture.call_args.kwargs["amount"], Decimal("120.00"))
+        self.assertTrue(capture.call_args.kwargs["final"])
+        self.deposit.refresh_from_db()
+        self.assertEqual(self.deposit.status, DamageDeposit.Status.CLAIMED)
+        self.assertEqual(self.deposit.captured_amount, Decimal("120.00"))
+        self.assertEqual(self.deposit.paypal_capture_id, "CAP-7")
+        self.assertIn("Broken shower screen", self.deposit.notes)
+
+    def test_capturing_more_than_is_held_is_refused_before_paypal_is_called(self) -> None:
+        with patch("concierge.paypal.capture") as capture:
+            response = self.client.post(
+                f"/admin/concierge/damagedeposit/{self.deposit.pk}/capture/",
+                {"amount": "500.00", "reason": "Everything", "confirm": "on"},
+            )
+        capture.assert_not_called()
+        self.assertContains(response, "Only USD 300.00 is held")
+
+    def test_capture_needs_the_confirmation_ticked(self) -> None:
+        with patch("concierge.paypal.capture") as capture:
+            self.client.post(
+                f"/admin/concierge/damagedeposit/{self.deposit.pk}/capture/",
+                {"amount": "50.00", "reason": "Scratch"},
+            )
+        capture.assert_not_called()
+
+    def test_capture_is_staff_only(self) -> None:
+        self.client.logout()
+        response = self.client.post(
+            f"/admin/concierge/damagedeposit/{self.deposit.pk}/capture/",
+            {"amount": "50.00", "reason": "Scratch", "confirm": "on"},
+        )
+        self.assertEqual(response.status_code, 302)
+        self.deposit.refresh_from_db()
+        self.assertEqual(self.deposit.status, DamageDeposit.Status.HELD)
+
+    def test_the_amount_is_locked_once_money_is_held(self) -> None:
+        from concierge.admin import DamageDepositAdmin
+
+        model_admin = DamageDepositAdmin(DamageDeposit, admin.site)
+        request = RequestFactory().get("/")
+        request.user = self.staff
+        self.assertIn("amount", model_admin.get_readonly_fields(request, self.deposit))
+
+        draft = DamageDeposit.objects.create(guest_name="D", amount=Decimal("1"))
+        self.assertNotIn("amount", model_admin.get_readonly_fields(request, draft))
+
+    def test_a_new_deposit_is_prefilled_from_site_settings(self) -> None:
+        from concierge.admin import DamageDepositAdmin
+
+        site = SiteSettings.load()
+        site.deposit_amount = Decimal("250.00")
+        site.save()
+        model_admin = DamageDepositAdmin(DamageDeposit, admin.site)
+        request = RequestFactory().get("/")
+        initial = model_admin.get_changeform_initial_data(request)
+        self.assertEqual(initial["amount"], Decimal("250.00"))
+
+    def test_changing_the_site_amount_does_not_rewrite_existing_holds(self) -> None:
+        site = SiteSettings.load()
+        site.deposit_amount = Decimal("999.00")
+        site.save()
+        self.deposit.refresh_from_db()
+        self.assertEqual(self.deposit.amount, Decimal("300.00"))
+
+
+class DepositSyncTests(TestCase):
+    """Reconciling with PayPal, which expires holds without telling us."""
+
+    def setUp(self) -> None:
+        self.deposit = DamageDeposit.objects.create(
+            guest_name="Lena Hoffmann", amount=Decimal("300.00"), currency="USD",
+            status=DamageDeposit.Status.HELD,
+            paypal_authorization_id="AUTH-123",
+            authorized_at=timezone.now() - datetime.timedelta(days=30),
+            expires_at=timezone.now() - datetime.timedelta(days=1),
+        )
+
+    def test_an_expired_authorization_is_marked_expired(self) -> None:
+        from concierge.admin import sync_authorization
+
+        changed = sync_authorization(self.deposit, _authorization(status="EXPIRED"))
+        self.assertTrue(changed)
+        self.deposit.refresh_from_db()
+        self.assertEqual(self.deposit.status, DamageDeposit.Status.EXPIRED)
+        self.assertIsNotNone(self.deposit.resolved_at)
+
+    def test_a_hold_captured_outside_the_app_is_noticed(self) -> None:
+        from concierge.admin import sync_authorization
+
+        sync_authorization(self.deposit, _authorization(status="CAPTURED"))
+        self.deposit.refresh_from_db()
+        self.assertEqual(self.deposit.status, DamageDeposit.Status.CLAIMED)
+
+    def test_a_still_live_hold_is_left_alone(self) -> None:
+        from concierge.admin import sync_authorization
+
+        expiry = self.deposit.expires_at
+        changed = sync_authorization(self.deposit, _authorization(status="CREATED", expires_at=expiry))
+        self.assertFalse(changed)
+        self.deposit.refresh_from_db()
+        self.assertEqual(self.deposit.status, DamageDeposit.Status.HELD)
+
+    @override_settings(PAYPAL_CLIENT_ID="id", PAYPAL_CLIENT_SECRET="secret")
+    def test_the_command_reconciles_live_holds(self) -> None:
+        from django.core.management import call_command
+
+        out = StringIO()
+        with patch("concierge.paypal.get_authorization", return_value=_authorization(status="EXPIRED")):
+            call_command("sync_deposits", stdout=out, stderr=StringIO())
+        self.deposit.refresh_from_db()
+        self.assertEqual(self.deposit.status, DamageDeposit.Status.EXPIRED)
+        self.assertIn("Checked 1", out.getvalue())
+
+    @override_settings(PAYPAL_CLIENT_ID="", PAYPAL_CLIENT_SECRET="")
+    def test_the_command_says_so_when_paypal_is_unconfigured(self) -> None:
+        from django.core.management import call_command
+
+        err = StringIO()
+        call_command("sync_deposits", stdout=StringIO(), stderr=err)
+        self.assertIn("PAYPAL_CLIENT_ID", err.getvalue())
+
+    @override_settings(PAYPAL_CLIENT_ID="id", PAYPAL_CLIENT_SECRET="secret")
+    def test_reauthorize_flag_renews_a_stale_hold(self) -> None:
+        from django.core.management import call_command
+
+        self.deposit.expires_at = timezone.now() + datetime.timedelta(days=10)
+        self.deposit.save()
+        fresh = _authorization(id="AUTH-NEW")
+        with patch("concierge.paypal.get_authorization", return_value=_authorization()), \
+             patch("concierge.paypal.reauthorize", return_value=fresh) as reauth:
+            call_command("sync_deposits", "--reauthorize", stdout=StringIO(), stderr=StringIO())
+        reauth.assert_called_once()
+        self.deposit.refresh_from_db()
+        self.assertEqual(self.deposit.paypal_authorization_id, "AUTH-NEW")
+
+
+class PayPalClientTests(TestCase):
+    """The wire format, which is where a quiet mistake costs real money."""
+
+    def test_amounts_are_two_decimal_strings(self) -> None:
+        from concierge.paypal import money
+
+        self.assertEqual(money(Decimal("300"), "USD"), {"currency_code": "USD", "value": "300.00"})
+        self.assertEqual(money(Decimal("12.345"), "eur")["value"], "12.35")
+        self.assertEqual(money(Decimal("12.344"), "EUR")["value"], "12.34")
+
+    def test_paypal_timestamps_parse_on_python_39(self) -> None:
+        """fromisoformat on 3.9 rejects the trailing Z PayPal sends."""
+        from concierge.paypal import _parse_time
+
+        parsed = _parse_time("2026-11-17T10:04:51Z")
+        self.assertIsNotNone(parsed)
+        self.assertEqual(parsed.year, 2026)
+        self.assertIsNotNone(parsed.tzinfo)
+        self.assertIsNone(_parse_time(""))
+        self.assertIsNone(_parse_time("not a date"))
+
+    def test_an_order_with_no_authorization_raises_rather_than_storing_nothing(self) -> None:
+        """A blank id stored as a hold would read as held and hold nothing."""
+        from concierge.paypal import PayPalError, _authorization_from_order
+
+        with self.assertRaises(PayPalError):
+            _authorization_from_order({"status": "COMPLETED", "purchase_units": [{}]})
+
+    def test_the_authorization_is_dug_out_of_the_order(self) -> None:
+        from concierge.paypal import _authorization_from_order
+
+        parsed = _authorization_from_order({
+            "purchase_units": [{
+                "payments": {"authorizations": [{
+                    "id": "AUTH-9",
+                    "status": "CREATED",
+                    "amount": {"currency_code": "USD", "value": "300.00"},
+                    "expiration_time": "2026-11-17T10:04:51Z",
+                }]}
+            }]
+        })
+        self.assertEqual(parsed.id, "AUTH-9")
+        self.assertEqual(parsed.amount, Decimal("300.00"))
+        self.assertIsNotNone(parsed.expires_at)
+
+    def test_create_order_asks_for_a_hold_not_a_payment(self) -> None:
+        from concierge import paypal as paypal_module
+
+        with patch.object(paypal_module, "_request", return_value={"id": "ORDER-1"}) as request:
+            paypal_module.create_order(
+                amount=Decimal("300"), currency="USD",
+                reference="4821993077", description="Deposit",
+            )
+        body = request.call_args.kwargs["body"]
+        self.assertEqual(body["intent"], "AUTHORIZE")
+        self.assertEqual(body["purchase_units"][0]["amount"]["value"], "300.00")
+        self.assertEqual(body["purchase_units"][0]["custom_id"], "4821993077")
+
+    def test_unconfigured_credentials_fail_loudly(self) -> None:
+        from concierge.paypal import PayPalError, _access_token
+
+        with override_settings(PAYPAL_CLIENT_ID="", PAYPAL_CLIENT_SECRET=""):
+            with self.assertRaises(PayPalError):
+                _access_token()
+
+    def test_sandbox_and_live_hit_different_hosts(self) -> None:
+        from concierge import paypal as paypal_module
+
+        with override_settings(PAYPAL_ENV="live"):
+            self.assertEqual(paypal_module.api_base(), paypal_module.LIVE_BASE)
+        with override_settings(PAYPAL_ENV="sandbox"):
+            self.assertEqual(paypal_module.api_base(), paypal_module.SANDBOX_BASE)

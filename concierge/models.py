@@ -48,6 +48,20 @@ def _unique_qr_token() -> str:
     raise RuntimeError("Could not find an unused QR token after 20 attempts.")
 
 
+def _unique_deposit_token() -> str:
+    """An unguessable token for a deposit link.
+
+    Longer and from a wider alphabet than a QR token, because this one is not
+    read off a card by eye — it is pasted into a Booking.com message, and
+    anyone who guesses it sees the guest's name and booking reference.
+    """
+    for _ in range(20):
+        token = secrets.token_urlsafe(18)
+        if not DamageDeposit.objects.filter(token=token).exists():
+            return token
+    raise RuntimeError("Could not find an unused deposit token after 20 attempts.")
+
+
 class Service(models.Model):
     """A category of service the host offers via the QR (e.g. Saona excursion, airport taxi)."""
 
@@ -637,6 +651,36 @@ class SiteSettings(models.Model):
     tagline_es = models.CharField(max_length=240, blank=True)
     tagline_fr = models.CharField(max_length=240, blank=True)
 
+    # --- damage protection ------------------------------------------------
+    # One figure for every booking, by choice: a per-venue amount is a second
+    # thing to keep right, and the deposit is quoted to the guest in the
+    # Booking.com listing policy, which is also site-wide.
+    deposit_amount = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        default=0,
+        validators=[MinValueValidator(0)],
+        help_text=(
+            "How much to hold per booking. 0 turns damage deposits off — no new "
+            "ones can be created. Changing it never touches a deposit already "
+            "created; each one keeps the amount it was created with."
+        ),
+    )
+    deposit_currency = models.CharField(
+        max_length=3,
+        default="USD",
+        help_text="Three-letter code, e.g. USD or EUR. Must be one your PayPal account accepts.",
+    )
+    deposit_terms_en = models.TextField(
+        blank=True,
+        help_text=(
+            "Shown to the guest above the PayPal button. Say what the hold is for, "
+            "that it is not a charge, and when you release it."
+        ),
+    )
+    deposit_terms_es = models.TextField(blank=True)
+    deposit_terms_fr = models.TextField(blank=True)
+
     class Meta:
         verbose_name = "Site settings"
         verbose_name_plural = "Site settings"
@@ -671,6 +715,21 @@ class SiteSettings(models.Model):
             "tagline_en": "Whatever you need during your stay, we'll arrange it for you over WhatsApp.",
             "tagline_es": "Lo que necesites durante tu estadía, lo coordinamos por WhatsApp.",
             "tagline_fr": "Tout ce dont vous avez besoin pendant votre séjour, nous l'organisons sur WhatsApp.",
+            "deposit_terms_en": (
+                "This is a refundable security deposit held against damage. Your card "
+                "is not charged — PayPal only reserves the amount, and we release it "
+                "within 48 hours of check-out once the apartment has been checked."
+            ),
+            "deposit_terms_es": (
+                "Es un depósito de garantía reembolsable por daños. No se cobra nada a "
+                "tu tarjeta — PayPal solo reserva el importe, y lo liberamos en las 48 "
+                "horas siguientes a tu salida, una vez revisado el apartamento."
+            ),
+            "deposit_terms_fr": (
+                "Il s'agit d'une caution remboursable en cas de dégâts. Votre carte "
+                "n'est pas débitée — PayPal ne fait que réserver le montant, et nous le "
+                "libérons dans les 48 heures suivant votre départ, après vérification."
+            ),
         }
 
 
@@ -720,3 +779,200 @@ class Message(models.Model):
 
     def __str__(self) -> str:
         return f"{self.direction} @ {self.created_at:%Y-%m-%d %H:%M}: {self.body[:40]}"
+
+
+class DamageDeposit(models.Model):
+    """A refundable hold placed on a guest's card against damage.
+
+    PayPal has no "reserve some money" primitive; what it has is the
+    authorize/capture flow built for shipping goods, and this bends it to a
+    deposit. The consequence is PayPal's clock, which the rest of this model
+    exists to keep track of: the hold is guaranteed capturable for 3 days, is
+    reauthorizable up to 29, and is gone after that.
+
+    So a deposit is only worth creating close to check-in, and a stay longer
+    than four weeks cannot be covered by a single hold at all. `sync_deposits`
+    is what keeps the stored status honest, because PayPal expires a hold on
+    its own schedule and never tells us.
+
+    No card details touch this server. The guest approves on PayPal's own page
+    and all that comes back is an authorization id.
+    """
+
+    class Status(models.TextChoices):
+        DRAFT = "draft", "Draft — link not sent yet"
+        SENT = "sent", "Link sent — waiting for the guest"
+        HELD = "held", "Held — funds reserved, nothing charged"
+        RELEASED = "released", "Released — hold cancelled, guest owes nothing"
+        CLAIMED = "claimed", "Claimed — captured for damage"
+        EXPIRED = "expired", "Expired — PayPal released it after 29 days"
+        FAILED = "failed", "Failed — PayPal declined the hold"
+
+    # Statuses where PayPal is holding the guest's money right now. Used by
+    # the admin and by sync_deposits to decide what still needs watching.
+    LIVE_STATUSES = (Status.HELD,)
+
+    token = models.CharField(
+        max_length=64,
+        unique=True,
+        editable=False,
+        help_text="The secret in the deposit link. Anyone holding it can open this page.",
+    )
+
+    # --- who and what for -------------------------------------------------
+    guest_name = models.CharField(max_length=120, help_text="As it appears on the booking.")
+    booking_reference = models.CharField(
+        max_length=60,
+        blank=True,
+        help_text="The Booking.com confirmation number, so a hold can be traced back to a stay.",
+    )
+    guest_email = models.EmailField(blank=True)
+    guest_phone = models.CharField(
+        max_length=20,
+        blank=True,
+        help_text="E.164, e.g. +4915112345678. Only needed to send the link over WhatsApp.",
+    )
+    location = models.ForeignKey(
+        Location,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="deposits",
+        help_text="Which property the stay is at. Optional while there is only one.",
+    )
+    check_in = models.DateField(
+        null=True,
+        blank=True,
+        help_text="Used to warn you when a hold would expire before check-out.",
+    )
+    check_out = models.DateField(null=True, blank=True)
+
+    # --- the money --------------------------------------------------------
+    # Snapshot, not a live lookup, for the same reason Commission snapshots the
+    # venue share: raising the site-wide deposit must not silently change what
+    # a guest already agreed to and what PayPal is already holding.
+    amount = models.DecimalField(
+        max_digits=10, decimal_places=2, validators=[MinValueValidator(0)],
+        help_text="Taken from Site settings when the deposit is created, then fixed.",
+    )
+    currency = models.CharField(max_length=3, default="USD")
+
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT, db_index=True)
+
+    # --- what PayPal gave us ---------------------------------------------
+    paypal_order_id = models.CharField(max_length=64, blank=True, editable=False)
+    paypal_authorization_id = models.CharField(
+        max_length=64, blank=True, editable=False,
+        help_text="Changes every time the hold is reauthorized — the newest one is the live hold.",
+    )
+    paypal_capture_id = models.CharField(max_length=64, blank=True, editable=False)
+    # PayPal's own figure, not ours: it is the authority on when the hold dies.
+    expires_at = models.DateTimeField(null=True, blank=True, editable=False)
+    captured_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, editable=False)
+    # Sandbox holds must never be mistaken for real ones in the admin list.
+    environment = models.CharField(max_length=10, blank=True, editable=False)
+
+    created_at = models.DateTimeField(default=timezone.now)
+    sent_at = models.DateTimeField(null=True, blank=True)
+    authorized_at = models.DateTimeField(null=True, blank=True, editable=False)
+    resolved_at = models.DateTimeField(
+        null=True, blank=True, editable=False,
+        help_text="When the hold was released, claimed, or expired.",
+    )
+    last_error = models.TextField(blank=True, editable=False)
+    notes = models.TextField(blank=True, help_text="Internal — what was damaged, what you charged for.")
+
+    class Meta:
+        ordering = ("-created_at",)
+        verbose_name = "damage deposit"
+        indexes = [
+            models.Index(fields=("status", "expires_at")),
+            models.Index(fields=("status", "check_out")),
+        ]
+
+    def __str__(self) -> str:
+        return f"{self.guest_name} · {self.currency} {self.amount} · {self.get_status_display()}"
+
+    def save(self, *args, **kwargs):
+        if not self.token:
+            self.token = _unique_deposit_token()
+        if not self.environment:
+            from django.conf import settings as dj_settings
+
+            self.environment = getattr(dj_settings, "PAYPAL_ENV", "sandbox")
+        return super().save(*args, **kwargs)
+
+    # --- the link ---------------------------------------------------------
+
+    def path(self) -> str:
+        return f"/deposit/{self.token}/"
+
+    # --- PayPal's clock ---------------------------------------------------
+
+    @property
+    def honor_period_ends(self):
+        """Until when PayPal guarantees the hold can still be captured.
+
+        After this, a capture may well work — it just stops being guaranteed,
+        which is the point at which reauthorizing is worth doing.
+        """
+        if not self.authorized_at:
+            return None
+        return self.authorized_at + datetime.timedelta(days=paypal_windows()[0])
+
+    @property
+    def expiry(self):
+        """When the hold dies: PayPal's figure, or the 29-day rule as a fallback."""
+        if self.expires_at:
+            return self.expires_at
+        if self.authorized_at:
+            return self.authorized_at + datetime.timedelta(days=paypal_windows()[1])
+        return None
+
+    @property
+    def days_left(self):
+        """Whole days until the hold expires. None when nothing is held."""
+        expiry = self.expiry
+        if not expiry or self.status not in self.LIVE_STATUSES:
+            return None
+        return (expiry - timezone.now()).days
+
+    @property
+    def is_held(self) -> bool:
+        return self.status in self.LIVE_STATUSES
+
+    @property
+    def needs_reauthorization(self) -> bool:
+        """Past the guaranteed window, but the hold is still alive to renew."""
+        if not self.is_held:
+            return False
+        ends = self.honor_period_ends
+        return bool(ends and timezone.now() > ends and (self.days_left or 0) > 0)
+
+    @property
+    def outlasts_the_stay(self) -> bool:
+        """True when the hold will still be alive at check-out.
+
+        A hold placed too early is the quiet failure mode of this whole
+        feature: it looks fine in the admin and is gone by the time anyone
+        checks the apartment.
+        """
+        expiry = self.expiry
+        if not (expiry and self.check_out):
+            return True
+        return expiry.date() >= self.check_out
+
+    def mark_resolved(self, status: str) -> None:
+        self.status = status
+        self.resolved_at = timezone.now()
+
+
+def paypal_windows() -> tuple:
+    """(honor period, validity period) in days, read from the PayPal client.
+
+    Imported lazily so models.py does not pull in `requests` at import time —
+    the admin and the landing page have no reason to.
+    """
+    from .paypal import HONOR_PERIOD_DAYS, VALIDITY_PERIOD_DAYS
+
+    return HONOR_PERIOD_DAYS, VALIDITY_PERIOD_DAYS

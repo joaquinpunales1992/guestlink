@@ -206,6 +206,15 @@ WHATSAPP_DRY_RUN = _env_bool("WHATSAPP_DRY_RUN", True)
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
+# --- PayPal, for damage-protection holds ---
+# There is deliberately no dry-run switch here, unlike WhatsApp. A fake hold
+# would show as "held" in the admin while the guest's bank knows nothing about
+# it, and the host would discover the difference only after the damage. Use
+# PAYPAL_ENV=sandbox instead: real API calls, test money.
+PAYPAL_ENV = os.environ.get("PAYPAL_ENV", "sandbox").strip().lower()
+PAYPAL_CLIENT_ID = os.environ.get("PAYPAL_CLIENT_ID", "").strip()
+PAYPAL_CLIENT_SECRET = os.environ.get("PAYPAL_CLIENT_SECRET", "").strip()
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,

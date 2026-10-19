@@ -4,6 +4,8 @@ import decimal
 from django.conf import settings
 from django.contrib import admin, messages
 from django.db.models import Count, Q, Sum
+from django.http import HttpResponseRedirect
+from django.shortcuts import render
 from django.utils import timezone
 from django.urls import reverse
 from django.utils.html import format_html
@@ -12,6 +14,7 @@ from django import forms
 
 from .models import (
     Commission,
+    DamageDeposit,
     Guest,
     Location,
     LocationEvent,
@@ -23,6 +26,7 @@ from .models import (
     SiteSettings,
     Ticket,
 )
+from . import paypal
 from .referral_preview import PreviewError, fetch_preview, points_at_a_listing
 from .translate import TranslationError, fill_missing_names
 
@@ -673,6 +677,24 @@ class SiteSettingsAdmin(admin.ModelAdmin):
         ("Tab & footer", {"fields": ("tab_title", "footer_text")}),
         ("Headline (big h1)", {"fields": ("headline_en", "headline_es", "headline_fr")}),
         ("Tagline (subtitle under h1)", {"fields": ("tagline_en", "tagline_es", "tagline_fr")}),
+        (
+            "Damage deposits",
+            {
+                "fields": (
+                    "deposit_amount",
+                    "deposit_currency",
+                    "deposit_terms_en",
+                    "deposit_terms_es",
+                    "deposit_terms_fr",
+                ),
+                "description": (
+                    "One amount for every booking. Set it to 0 to stop new deposits "
+                    "being created — holds already placed are unaffected. Whatever "
+                    "you put here must match the damage deposit declared in your "
+                    "Booking.com listing policies."
+                ),
+            },
+        ),
     )
 
     def has_add_permission(self, request) -> bool:
@@ -709,3 +731,460 @@ class MessageAdmin(admin.ModelAdmin):
     @admin.display(description="body")
     def body_short(self, obj: Message) -> str:
         return (obj.body[:60] + "…") if len(obj.body) > 60 else obj.body
+
+
+class CaptureForm(forms.Form):
+    """How much of a hold to take, and why.
+
+    A separate form rather than inline fields on the change page because a
+    capture is irreversible from this side — it must be a deliberate step with
+    the amount typed each time, not a field that can be left set by accident.
+    """
+
+    amount = forms.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        min_value=decimal.Decimal("0.01"),
+        label="Amount to charge",
+        help_text="Never more than the amount held. The rest is released automatically.",
+    )
+    reason = forms.CharField(
+        max_length=255,
+        label="What was damaged",
+        help_text="Shown on the guest's PayPal receipt, and kept in the deposit's notes.",
+    )
+    confirm = forms.BooleanField(
+        label="I have evidence of this damage and have told the guest",
+        help_text="PayPal disputes are decided on evidence, and a deposit has no seller protection.",
+    )
+
+
+class DepositStateFilter(admin.SimpleListFilter):
+    """The questions actually asked of this list, which statuses alone can't answer."""
+
+    title = "needs attention"
+    parameter_name = "attention"
+
+    def lookups(self, request, model_admin):
+        return (
+            ("expiring", "Hold expiring within 5 days"),
+            ("stale", "Past check-out, still held"),
+            ("unsent", "Created but never sent"),
+        )
+
+    def queryset(self, request, queryset):
+        now = timezone.now()
+        if self.value() == "expiring":
+            return queryset.filter(
+                status=DamageDeposit.Status.HELD,
+                expires_at__lte=now + datetime.timedelta(days=5),
+            )
+        if self.value() == "stale":
+            return queryset.filter(
+                status=DamageDeposit.Status.HELD, check_out__lt=now.date()
+            )
+        if self.value() == "unsent":
+            return queryset.filter(status=DamageDeposit.Status.DRAFT)
+        return queryset
+
+
+@admin.register(DamageDeposit)
+class DamageDepositAdmin(admin.ModelAdmin):
+    list_display = (
+        "guest_name", "booking_reference", "held_amount", "state",
+        "clock", "check_out", "env", "created_at",
+    )
+    list_filter = (DepositStateFilter, "status", "location", "environment")
+    search_fields = ("guest_name", "booking_reference", "guest_email", "guest_phone", "notes")
+    date_hierarchy = "created_at"
+    actions = ["mark_sent", "send_link_whatsapp", "release_holds", "reauthorize_holds", "refresh_from_paypal"]
+
+    readonly_fields = (
+        "token", "deposit_link", "status", "paypal_order_id", "paypal_authorization_id",
+        "paypal_capture_id", "expires_at", "authorized_at", "resolved_at",
+        "captured_amount", "environment", "created_at", "last_error", "lifecycle",
+    )
+    fieldsets = (
+        (
+            "The guest",
+            {
+                "fields": (
+                    "guest_name", "booking_reference", "guest_email", "guest_phone",
+                    "location", "check_in", "check_out",
+                ),
+            },
+        ),
+        (
+            "The hold",
+            {
+                "fields": ("amount", "currency", "status", "lifecycle", "deposit_link", "sent_at"),
+                "description": (
+                    "The amount is copied from Site settings when the deposit is created "
+                    "and then fixed, so changing the site-wide figure never alters a hold "
+                    "a guest has already agreed to."
+                ),
+            },
+        ),
+        ("Notes", {"fields": ("notes",)}),
+        (
+            "PayPal",
+            {
+                "classes": ("collapse",),
+                "fields": (
+                    "environment", "paypal_order_id", "paypal_authorization_id",
+                    "paypal_capture_id", "captured_amount", "authorized_at",
+                    "expires_at", "resolved_at", "last_error", "token", "created_at",
+                ),
+            },
+        ),
+    )
+
+    def get_readonly_fields(self, request, obj=None):
+        fields = list(super().get_readonly_fields(request, obj))
+        # Once PayPal is holding money against a figure, that figure is settled
+        # between you and the guest; editing it here would only make the admin
+        # disagree with PayPal.
+        if obj and obj.status != DamageDeposit.Status.DRAFT:
+            fields += ["amount", "currency"]
+        return fields
+
+    def get_changeform_initial_data(self, request):
+        """Pre-fill a new deposit with the site-wide amount."""
+        site = SiteSettings.load()
+        return {"amount": site.deposit_amount, "currency": site.deposit_currency}
+
+    # --- columns ---------------------------------------------------------
+
+    @admin.display(description="amount", ordering="amount")
+    def held_amount(self, obj: DamageDeposit) -> str:
+        if obj.captured_amount:
+            return format_html(
+                "<span title='captured'>{} {} <b>of</b> {}</span>",
+                obj.currency, f"{obj.captured_amount:.2f}", f"{obj.amount:.2f}",
+            )
+        return f"{obj.currency} {obj.amount:.2f}"
+
+    @admin.display(description="status", ordering="status")
+    def state(self, obj: DamageDeposit) -> str:
+        colours = {
+            DamageDeposit.Status.HELD: "#1e7b34",
+            DamageDeposit.Status.RELEASED: "#5f7b81",
+            DamageDeposit.Status.CLAIMED: "#8a6d00",
+            DamageDeposit.Status.EXPIRED: "#b3261e",
+            DamageDeposit.Status.FAILED: "#b3261e",
+        }
+        label = obj.get_status_display().split(" — ")[0]
+        colour = colours.get(obj.status, "#143840")
+        if obj.last_error and obj.status == DamageDeposit.Status.FAILED:
+            return format_html(
+                '<span style="color:{};font-weight:600" title="{}">{}</span>',
+                colour, obj.last_error[:300], label,
+            )
+        return format_html('<span style="color:{};font-weight:600">{}</span>', colour, label)
+
+    @admin.display(description="hold expires")
+    def clock(self, obj: DamageDeposit) -> str:
+        """How long the hold has left — the thing most likely to catch you out."""
+        if not obj.is_held:
+            return "—"
+        days = obj.days_left
+        if days is None:
+            return "—"
+        if days < 0:
+            return format_html('<span style="color:#b3261e;font-weight:600">expired</span>')
+        if not obj.outlasts_the_stay:
+            return format_html(
+                '<span style="color:#b3261e;font-weight:600" '
+                'title="This hold dies before the guest checks out.">{} days ⚠</span>',
+                days,
+            )
+        colour = "#b3261e" if days <= 3 else ("#8a6d00" if days <= 7 else "#1e7b34")
+        suffix = " · reauth" if obj.needs_reauthorization else ""
+        return format_html('<span style="color:{}">{} days{}</span>', colour, days, suffix)
+
+    @admin.display(description="env", ordering="environment")
+    def env(self, obj: DamageDeposit) -> str:
+        if obj.environment == "live":
+            return format_html('<span style="color:#1e7b34;font-weight:600">live</span>')
+        return format_html('<span style="color:#d9694a;font-weight:600">sandbox</span>')
+
+    @admin.display(description="Link to send the guest")
+    def deposit_link(self, obj: DamageDeposit) -> str:
+        if not obj.pk:
+            return "Save first — the link is generated with the deposit."
+        url = obj.path()
+        return format_html(
+            '<div><input readonly value="{}" style="width:100%;max-width:560px;padding:7px;'
+            'font-family:ui-monospace,monospace" onclick="this.select()">'
+            '<p style="margin:6px 0 0">Paste this into the Booking.com message thread. '
+            '<a href="{}" target="_blank">Open it</a> to see what the guest sees.</p></div>',
+            url, url,
+        )
+
+    @admin.display(description="Where this stands")
+    def lifecycle(self, obj: DamageDeposit) -> str:
+        """Plain English about PayPal's clock, which the status alone hides."""
+        if not obj.pk:
+            return "—"
+        if obj.status == DamageDeposit.Status.DRAFT:
+            return "Not sent yet. Copy the link below into the Booking.com thread."
+        if obj.status == DamageDeposit.Status.SENT:
+            return "Waiting for the guest to approve. Nothing is held."
+        if obj.status == DamageDeposit.Status.FAILED:
+            return format_html("PayPal declined the hold. <br><code>{}</code>", obj.last_error)
+        if obj.status == DamageDeposit.Status.CLAIMED:
+            return f"Captured {obj.currency} {obj.captured_amount:.2f}. Any remainder was released."
+        if obj.status == DamageDeposit.Status.RELEASED:
+            return "Released. The guest was never charged."
+        if obj.status == DamageDeposit.Status.EXPIRED:
+            return "PayPal expired this hold. Nothing can be captured from it."
+
+        parts = [f"Holding {obj.currency} {obj.amount:.2f}. Nothing charged."]
+        if obj.needs_reauthorization:
+            parts.append(
+                f"Past the {paypal.HONOR_PERIOD_DAYS}-day guaranteed window — a capture may "
+                "now fail. Use “Reauthorize” to restart it."
+            )
+        if not obj.outlasts_the_stay:
+            parts.append("⚠ This hold expires before check-out. Reauthorize before then.")
+        return format_html("<br>".join("{}" for _ in parts), *parts)
+
+    # --- actions ---------------------------------------------------------
+
+    @admin.action(description="Mark the link as sent")
+    def mark_sent(self, request, queryset):
+        updated = queryset.filter(status=DamageDeposit.Status.DRAFT).update(
+            status=DamageDeposit.Status.SENT, sent_at=timezone.now()
+        )
+        self.message_user(request, f"{updated} marked as sent.", messages.SUCCESS)
+
+    @admin.action(description="Send the link over WhatsApp")
+    def send_link_whatsapp(self, request, queryset):
+        """Only useful for guests who gave a WhatsApp number.
+
+        Booking.com guests usually have not, so the normal route is still
+        copying the link into the Booking.com thread — this is for the ones who
+        have already messaged you.
+        """
+        from .whatsapp import WhatsAppError, send_text
+
+        sent = skipped = 0
+        for record in queryset:
+            if not record.guest_phone:
+                skipped += 1
+                continue
+            url = request.build_absolute_uri(record.path())
+            body = (
+                f"Hi {record.guest_name}, this is {settings.HOST_NAME}. "
+                f"Before check-in we hold a refundable {record.currency} {record.amount:.2f} "
+                f"security deposit. Your card is not charged — PayPal only reserves it, "
+                f"and we release it after check-out: {url}"
+            )
+            try:
+                send_text(record.guest_phone, body)
+            except WhatsAppError as exc:
+                self.message_user(request, f"{record.guest_name}: {exc}", messages.ERROR)
+                continue
+            if record.status == DamageDeposit.Status.DRAFT:
+                record.status = DamageDeposit.Status.SENT
+            record.sent_at = timezone.now()
+            record.save(update_fields=("status", "sent_at"))
+            sent += 1
+
+        if sent:
+            self.message_user(request, f"Link sent to {sent} guest(s).", messages.SUCCESS)
+        if skipped:
+            self.message_user(
+                request, f"{skipped} skipped — no WhatsApp number on file.", messages.WARNING
+            )
+
+    @admin.action(description="Release the hold (guest is charged nothing)")
+    def release_holds(self, request, queryset):
+        released = 0
+        for record in queryset.filter(status=DamageDeposit.Status.HELD):
+            try:
+                paypal.void(record.paypal_authorization_id)
+            except paypal.PayPalError as exc:
+                self.message_user(request, f"{record.guest_name}: {exc}", messages.ERROR)
+                continue
+            record.mark_resolved(DamageDeposit.Status.RELEASED)
+            record.save(update_fields=("status", "resolved_at"))
+            released += 1
+        if released:
+            self.message_user(request, f"{released} hold(s) released.", messages.SUCCESS)
+
+    @admin.action(description="Reauthorize (restart the 3-day window)")
+    def reauthorize_holds(self, request, queryset):
+        """Mint a fresh authorization for a stay that outran the honor period.
+
+        PayPal returns a new id and supersedes the old one, so the stored id is
+        replaced — keeping the old one would mean later voiding something that
+        is no longer the live hold.
+        """
+        done = 0
+        for record in queryset.filter(status=DamageDeposit.Status.HELD):
+            try:
+                fresh = paypal.reauthorize(
+                    record.paypal_authorization_id,
+                    amount=record.amount,
+                    currency=record.currency,
+                )
+            except paypal.PayPalError as exc:
+                self.message_user(request, f"{record.guest_name}: {exc}", messages.ERROR)
+                continue
+            record.paypal_authorization_id = fresh.id
+            record.expires_at = fresh.expires_at
+            record.authorized_at = timezone.now()
+            record.save(update_fields=("paypal_authorization_id", "expires_at", "authorized_at"))
+            done += 1
+        if done:
+            self.message_user(request, f"{done} hold(s) reauthorized.", messages.SUCCESS)
+
+    @admin.action(description="Refresh status from PayPal")
+    def refresh_from_paypal(self, request, queryset):
+        """PayPal expires holds on its own schedule and never tells us."""
+        changed = checked = 0
+        for record in queryset.exclude(paypal_authorization_id=""):
+            try:
+                live = paypal.get_authorization(record.paypal_authorization_id)
+            except paypal.PayPalError as exc:
+                self.message_user(request, f"{record.guest_name}: {exc}", messages.ERROR)
+                continue
+            checked += 1
+            if sync_authorization(record, live):
+                changed += 1
+        self.message_user(
+            request, f"Checked {checked}; {changed} changed.", messages.SUCCESS
+        )
+
+    # --- capture, which gets its own page --------------------------------
+
+    def get_urls(self):
+        from django.urls import path as url_path
+
+        return [
+            url_path(
+                "<int:pk>/capture/",
+                self.admin_site.admin_view(self.capture_view),
+                name="concierge_damagedeposit_capture",
+            ),
+        ] + super().get_urls()
+
+    def change_view(self, request, object_id, form_url="", extra_context=None):
+        """Offer the capture page from the deposit, but only while one is held."""
+        record = self.get_object(request, object_id)
+        extra_context = extra_context or {}
+        if record and record.is_held:
+            extra_context["capture_url"] = reverse(
+                "admin:concierge_damagedeposit_capture", args=[record.pk]
+            )
+        return super().change_view(request, object_id, form_url, extra_context)
+
+    def capture_view(self, request, pk):
+        """Take money off a hold, for damage actually found."""
+        record = self.get_object(request, pk)
+        if record is None:
+            self.message_user(request, "No such deposit.", messages.ERROR)
+            return HttpResponseRedirect(reverse("admin:concierge_damagedeposit_changelist"))
+        if not record.is_held:
+            self.message_user(request, "Nothing is held against this deposit.", messages.ERROR)
+            return HttpResponseRedirect(
+                reverse("admin:concierge_damagedeposit_change", args=[record.pk])
+            )
+
+        if request.method == "POST":
+            form = CaptureForm(request.POST)
+            if form.is_valid():
+                amount = form.cleaned_data["amount"]
+                if amount > record.amount:
+                    form.add_error(
+                        "amount",
+                        f"Only {record.currency} {record.amount:.2f} is held. "
+                        "PayPal will reject anything above it.",
+                    )
+                else:
+                    return self._do_capture(request, record, form)
+        else:
+            form = CaptureForm(initial={"amount": record.amount})
+
+        return render(
+            request,
+            "admin/concierge/damagedeposit/capture.html",
+            {
+                **self.admin_site.each_context(request),
+                "opts": self.model._meta,
+                "deposit": record,
+                "form": form,
+                "title": f"Charge for damage — {record.guest_name}",
+            },
+        )
+
+    def _do_capture(self, request, record: DamageDeposit, form: CaptureForm):
+        amount = form.cleaned_data["amount"]
+        reason = form.cleaned_data["reason"]
+        try:
+            result = paypal.capture(
+                record.paypal_authorization_id,
+                amount=amount,
+                currency=record.currency,
+                note=reason,
+                final=True,
+            )
+        except paypal.PayPalError as exc:
+            self.message_user(request, f"PayPal refused the capture: {exc}", messages.ERROR)
+            return HttpResponseRedirect(
+                reverse("admin:concierge_damagedeposit_change", args=[record.pk])
+            )
+
+        record.paypal_capture_id = result.get("id", "")
+        record.captured_amount = amount
+        record.mark_resolved(DamageDeposit.Status.CLAIMED)
+        stamp = timezone.now().strftime("%Y-%m-%d")
+        record.notes = (
+            f"{record.notes}\n[{stamp}] Charged {record.currency} {amount:.2f}: {reason}"
+        ).strip()
+        record.save(update_fields=(
+            "paypal_capture_id", "captured_amount", "status", "resolved_at", "notes",
+        ))
+        self.message_user(
+            request,
+            f"Charged {record.currency} {amount:.2f}. Any remainder was released to the guest.",
+            messages.SUCCESS,
+        )
+        return HttpResponseRedirect(
+            reverse("admin:concierge_damagedeposit_change", args=[record.pk])
+        )
+
+
+def sync_authorization(record: DamageDeposit, live) -> bool:
+    """Bring one deposit in line with what PayPal says. True if it changed.
+
+    Shared by the admin action and the `sync_deposits` command so the two can
+    never disagree about what a PayPal status means.
+    """
+    fields = []
+    if live.expires_at and live.expires_at != record.expires_at:
+        record.expires_at = live.expires_at
+        fields.append("expires_at")
+
+    # PayPal's vocabulary, mapped onto ours. CREATED and PENDING both mean the
+    # hold stands; anything else means it no longer does.
+    mapped = {
+        "CREATED": DamageDeposit.Status.HELD,
+        "PENDING": DamageDeposit.Status.HELD,
+        "CAPTURED": DamageDeposit.Status.CLAIMED,
+        "VOIDED": DamageDeposit.Status.RELEASED,
+        "EXPIRED": DamageDeposit.Status.EXPIRED,
+        "DENIED": DamageDeposit.Status.FAILED,
+    }.get(live.status)
+
+    if mapped and mapped != record.status:
+        record.status = mapped
+        fields.append("status")
+        if mapped != DamageDeposit.Status.HELD and not record.resolved_at:
+            record.resolved_at = timezone.now()
+            fields.append("resolved_at")
+
+    if fields:
+        record.save(update_fields=tuple(fields))
+    return bool(fields)

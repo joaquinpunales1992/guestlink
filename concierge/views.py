@@ -17,12 +17,22 @@ from django.http import (
 )
 from django.shortcuts import get_object_or_404, render
 from django.urls import reverse
+from django.utils import timezone
 from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
-from . import qr, qr_pdf
+from . import paypal, qr, qr_pdf
 from .links import LANGUAGES, destination, place_name
-from .models import Location, LocationEvent, QrBatch, QrTag, Service, SiteSettings, Ticket
+from .models import (
+    DamageDeposit,
+    Location,
+    LocationEvent,
+    QrBatch,
+    QrTag,
+    Service,
+    SiteSettings,
+    Ticket,
+)
 from .relay import handle_inbound
 
 logger = logging.getLogger(__name__)
@@ -354,4 +364,142 @@ def ticket_thread(request: HttpRequest, short_code: str) -> HttpResponse:
         request,
         "concierge/ticket_thread.html",
         {"ticket": ticket, "messages": ticket.messages.order_by("created_at")},
+    )
+
+
+# --- damage deposits ------------------------------------------------------
+#
+# Three views, all keyed on the deposit's secret token: the page the guest
+# opens, and the two JSON endpoints PayPal's button calls. No card details
+# ever reach this server — the guest approves inside PayPal's own popup and
+# all that comes back is an order id to authorize.
+
+# Statuses from which a guest may still place a hold. Anything else means the
+# deposit is already settled, and a second hold would be a second reservation
+# against their card.
+_DEPOSIT_OPEN = (
+    DamageDeposit.Status.DRAFT,
+    DamageDeposit.Status.SENT,
+    DamageDeposit.Status.FAILED,
+)
+
+
+def _deposit_terms(site: SiteSettings, lang: str) -> str:
+    """This site's deposit wording, falling back to English when unwritten."""
+    return getattr(site, f"deposit_terms_{lang}", "") or site.deposit_terms_en
+
+
+def deposit(request: HttpRequest, token: str) -> HttpResponse:
+    """The page the guest opens from the link pasted into Booking.com.
+
+    Public and unauthenticated — the token is the only thing guarding it,
+    which is why it is long and random. It shows the guest their own name and
+    booking reference so they can tell a real link from a phishing one.
+    """
+    record = get_object_or_404(DamageDeposit, token=token)
+    site = SiteSettings.load()
+    lang = request.GET.get("lang", "en")
+    lang = lang if lang in LANGUAGES else "en"
+
+    return render(
+        request,
+        "concierge/deposit.html",
+        {
+            "deposit": record,
+            "site": site,
+            "lang": lang,
+            "terms": _deposit_terms(site, lang),
+            "host_name": settings.HOST_NAME,
+            "can_pay": record.status in _DEPOSIT_OPEN and paypal.is_configured(),
+            "already_held": record.status == DamageDeposit.Status.HELD,
+            "paypal_client_id": settings.PAYPAL_CLIENT_ID,
+            # Shown as a banner so a test link is never mistaken for a real one.
+            "sandbox": not paypal.is_live(),
+            "honor_days": paypal.HONOR_PERIOD_DAYS,
+        },
+    )
+
+
+@require_http_methods(["POST"])
+def deposit_create_order(request: HttpRequest, token: str) -> HttpResponse:
+    """Called by the PayPal button to get an order id. Holds nothing yet."""
+    record = get_object_or_404(DamageDeposit, token=token)
+    if record.status not in _DEPOSIT_OPEN:
+        return JsonResponse(
+            {"error": f"This deposit is already {record.get_status_display().split(' — ')[0].lower()}."},
+            status=409,
+        )
+    if record.amount <= 0:
+        return JsonResponse({"error": "This deposit has no amount set."}, status=400)
+
+    reference = record.booking_reference or f"deposit-{record.pk}"
+    try:
+        order = paypal.create_order(
+            amount=record.amount,
+            currency=record.currency,
+            reference=reference,
+            description=f"Refundable damage deposit — {record.guest_name}",
+            brand_name=record.location.name if record.location else settings.HOST_NAME,
+        )
+    except paypal.PayPalError as exc:
+        return _deposit_failure(record, exc, stage="create_order")
+
+    record.paypal_order_id = order.get("id", "")
+    record.last_error = ""
+    record.save(update_fields=("paypal_order_id", "last_error"))
+    return JsonResponse({"id": record.paypal_order_id})
+
+
+@require_http_methods(["POST"])
+def deposit_authorize(request: HttpRequest, token: str) -> HttpResponse:
+    """Place the hold, once the guest has approved the order in PayPal.
+
+    The order id is read from the stored record rather than from the request
+    body: the body is attacker-controlled, and authorizing an arbitrary order
+    id would attach someone else's payment to this deposit.
+    """
+    record = get_object_or_404(DamageDeposit, token=token)
+    if record.status == DamageDeposit.Status.HELD:
+        # The guest double-tapped, or PayPal retried. Report the existing hold
+        # rather than placing a second one against their card.
+        return JsonResponse({"status": "held", "amount": str(record.amount)})
+    if record.status not in _DEPOSIT_OPEN:
+        return JsonResponse({"error": "This deposit is no longer open."}, status=409)
+    if not record.paypal_order_id:
+        return JsonResponse({"error": "No PayPal order to authorize."}, status=400)
+
+    try:
+        authorization = paypal.authorize_order(record.paypal_order_id)
+    except paypal.PayPalError as exc:
+        return _deposit_failure(record, exc, stage="authorize")
+
+    record.paypal_authorization_id = authorization.id
+    record.expires_at = authorization.expires_at
+    record.authorized_at = timezone.now()
+    record.status = DamageDeposit.Status.HELD
+    record.last_error = ""
+    record.save(update_fields=(
+        "paypal_authorization_id", "expires_at", "authorized_at", "status", "last_error",
+    ))
+    logger.info(
+        "Deposit %s held: %s %s, authorization %s expiring %s",
+        record.pk, record.currency, record.amount, authorization.id, record.expires_at,
+    )
+    return JsonResponse({"status": "held", "amount": str(record.amount)})
+
+
+def _deposit_failure(record: DamageDeposit, exc: "paypal.PayPalError", *, stage: str) -> JsonResponse:
+    """Record why a hold could not be placed, and tell the guest plainly.
+
+    The stored message is for the host — it carries PayPal's debug id, which is
+    the first thing their support asks for. The guest gets a generic line,
+    because PayPal's own wording leaks why a card was declined.
+    """
+    record.status = DamageDeposit.Status.FAILED
+    record.last_error = f"{stage}: {exc}" + (f" (debug id {exc.debug_id})" if exc.debug_id else "")
+    record.save(update_fields=("status", "last_error"))
+    logger.error("Deposit %s failed at %s: %s", record.pk, stage, exc)
+    return JsonResponse(
+        {"error": "PayPal could not complete the hold. Please try again or contact your host."},
+        status=502,
     )

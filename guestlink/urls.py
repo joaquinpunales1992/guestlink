@@ -14,6 +14,11 @@ urlpatterns = [
     path("ticket/<str:short_code>/", concierge_views.ticket_thread, name="ticket_thread"),
     path("privacy/", concierge_views.privacy, name="privacy"),
     path("healthz/", concierge_views.healthz, name="healthz"),
+    # Damage deposits. The token is the only credential, so these sit above the
+    # location catch-all and never collide with a venue slug.
+    path("deposit/<str:token>/", concierge_views.deposit, name="deposit"),
+    path("deposit/<str:token>/order/", concierge_views.deposit_create_order, name="deposit_create_order"),
+    path("deposit/<str:token>/authorize/", concierge_views.deposit_authorize, name="deposit_authorize"),
     path("go/<slug:service_slug>/", concierge_views.go, name="go"),
     # Staff-only, and declared before the location catch-all below.
     # Before the location form below: a token is not a slug, and this keeps the

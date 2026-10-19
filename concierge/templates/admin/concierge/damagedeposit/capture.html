@@ -1,0 +1,47 @@
+{% extends "admin/base_site.html" %}
+
+{# Capture is the one irreversible step in a deposit's life, so it gets a page
+   of its own rather than a button on the change form: the amount is typed
+   each time, and the consequences are spelled out next to the field. #}
+
+{% block content %}
+<div id="content-main">
+  <div style="max-width:620px">
+
+    <div style="background:#fff8e1;border:1px solid #e0c060;border-radius:6px;padding:14px 16px;margin-bottom:18px">
+      <p style="margin:0 0 8px"><strong>This charges the guest for real.</strong></p>
+      <ul style="margin:0;padding-left:20px;line-height:1.6">
+        <li>PayPal holds <strong>{{ deposit.currency }} {{ deposit.amount|floatformat:2 }}</strong> — that is the ceiling.</li>
+        <li>Capturing is final here: to give it back you would have to refund it in PayPal.</li>
+        <li>Anything you do not take is released to the guest immediately.</li>
+        <li>A security deposit carries <strong>no PayPal seller protection</strong>. If the guest
+            disputes it, PayPal decides on the evidence you can produce.</li>
+      </ul>
+    </div>
+
+    <table style="margin-bottom:18px">
+      <tr><th style="text-align:left;padding-right:16px">Guest</th><td>{{ deposit.guest_name }}</td></tr>
+      {% if deposit.booking_reference %}
+        <tr><th style="text-align:left;padding-right:16px">Booking</th><td>{{ deposit.booking_reference }}</td></tr>
+      {% endif %}
+      <tr><th style="text-align:left;padding-right:16px">Held</th>
+          <td>{{ deposit.currency }} {{ deposit.amount|floatformat:2 }}</td></tr>
+      <tr><th style="text-align:left;padding-right:16px">Hold expires</th>
+          <td>{{ deposit.expiry|date:"j M Y H:i"|default:"—" }} ({{ deposit.days_left }} days left)</td></tr>
+      <tr><th style="text-align:left;padding-right:16px">Environment</th>
+          <td>{{ deposit.environment }}</td></tr>
+    </table>
+
+    <form method="post">
+      {% csrf_token %}
+      {{ form.as_p }}
+      <div class="submit-row" style="margin-top:18px">
+        <input type="submit" value="Charge the guest" class="default">
+        <a href="{% url 'admin:concierge_damagedeposit_change' deposit.pk %}"
+           class="button cancel-link" style="margin-left:10px">Cancel</a>
+      </div>
+    </form>
+
+  </div>
+</div>
+{% endblock %}

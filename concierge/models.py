@@ -869,7 +869,11 @@ class DamageDeposit(models.Model):
     # PayPal's own figure, not ours: it is the authority on when the hold dies.
     expires_at = models.DateTimeField(null=True, blank=True, editable=False)
     captured_amount = models.DecimalField(max_digits=10, decimal_places=2, default=0, editable=False)
-    # Sandbox holds must never be mistaken for real ones in the admin list.
+    # Which PayPal is actually holding the money. Seeded at creation but
+    # rewritten when the hold is placed, because PAYPAL_ENV can change in
+    # between — a deposit created under sandbox and approved after a switch to
+    # live holds real money, and this field reading "sandbox" would be the one
+    # lie that matters.
     environment = models.CharField(max_length=10, blank=True, editable=False)
 
     created_at = models.DateTimeField(default=timezone.now)

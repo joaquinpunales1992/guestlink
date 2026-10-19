@@ -788,6 +788,24 @@ class DepositStateFilter(admin.SimpleListFilter):
         return queryset
 
 
+def _wrong_environment(record: DamageDeposit) -> str:
+    """Why this deposit must not be acted on right now, or "" if it may be.
+
+    A hold placed against live PayPal cannot be voided, captured or renewed
+    through sandbox credentials: the authorization id does not exist there, so
+    the call fails with a confusing "not found" while the guest's money stays
+    reserved. Refusing up front names the real problem instead.
+    """
+    current = settings.PAYPAL_ENV
+    if record.environment and record.environment != current:
+        return (
+            f"{record.guest_name}: this hold was placed against PayPal "
+            f"{record.environment}, but PAYPAL_ENV is now {current}. Switch it back "
+            f"to {record.environment} and restart before touching this deposit."
+        )
+    return ""
+
+
 @admin.register(DamageDeposit)
 class DamageDepositAdmin(admin.ModelAdmin):
     list_display = (
@@ -1002,6 +1020,10 @@ class DamageDepositAdmin(admin.ModelAdmin):
     def release_holds(self, request, queryset):
         released = 0
         for record in queryset.filter(status=DamageDeposit.Status.HELD):
+            mismatch = _wrong_environment(record)
+            if mismatch:
+                self.message_user(request, mismatch, messages.ERROR)
+                continue
             try:
                 paypal.void(record.paypal_authorization_id)
             except paypal.PayPalError as exc:
@@ -1023,6 +1045,10 @@ class DamageDepositAdmin(admin.ModelAdmin):
         """
         done = 0
         for record in queryset.filter(status=DamageDeposit.Status.HELD):
+            mismatch = _wrong_environment(record)
+            if mismatch:
+                self.message_user(request, mismatch, messages.ERROR)
+                continue
             try:
                 fresh = paypal.reauthorize(
                     record.paypal_authorization_id,
@@ -1088,6 +1114,12 @@ class DamageDepositAdmin(admin.ModelAdmin):
             return HttpResponseRedirect(reverse("admin:concierge_damagedeposit_changelist"))
         if not record.is_held:
             self.message_user(request, "Nothing is held against this deposit.", messages.ERROR)
+            return HttpResponseRedirect(
+                reverse("admin:concierge_damagedeposit_change", args=[record.pk])
+            )
+        mismatch = _wrong_environment(record)
+        if mismatch:
+            self.message_user(request, mismatch, messages.ERROR)
             return HttpResponseRedirect(
                 reverse("admin:concierge_damagedeposit_change", args=[record.pk])
             )

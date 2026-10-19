@@ -445,8 +445,9 @@ def deposit_create_order(request: HttpRequest, token: str) -> HttpResponse:
         return _deposit_failure(record, exc, stage="create_order")
 
     record.paypal_order_id = order.get("id", "")
+    record.environment = settings.PAYPAL_ENV
     record.last_error = ""
-    record.save(update_fields=("paypal_order_id", "last_error"))
+    record.save(update_fields=("paypal_order_id", "environment", "last_error"))
     return JsonResponse({"id": record.paypal_order_id})
 
 
@@ -477,9 +478,16 @@ def deposit_authorize(request: HttpRequest, token: str) -> HttpResponse:
     record.expires_at = authorization.expires_at
     record.authorized_at = timezone.now()
     record.status = DamageDeposit.Status.HELD
+    # Stamped here, not at creation. The record is created before anyone knows
+    # which PayPal will be called, and PAYPAL_ENV can change in between — a
+    # deposit created under sandbox and approved after a switch to live holds
+    # real money while reading "sandbox", which is the one lie this field must
+    # never tell.
+    record.environment = settings.PAYPAL_ENV
     record.last_error = ""
     record.save(update_fields=(
-        "paypal_authorization_id", "expires_at", "authorized_at", "status", "last_error",
+        "paypal_authorization_id", "expires_at", "authorized_at", "status",
+        "environment", "last_error",
     ))
     logger.info(
         "Deposit %s held: %s %s, authorization %s expiring %s",

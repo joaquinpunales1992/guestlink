@@ -2090,6 +2090,46 @@ class DepositHoldTests(TestCase):
         self.assertEqual(response.status_code, 400)
 
 
+@override_settings(PAYPAL_CLIENT_ID="test-client", PAYPAL_CLIENT_SECRET="test-secret")
+class DepositEnvironmentTests(TestCase):
+    """Which PayPal actually holds the money — the field that must not lie.
+
+    Regression: `environment` used to be stamped when the record was created,
+    so a deposit created under sandbox and approved after a switch to live read
+    "sandbox" while holding real money on a real card.
+    """
+
+    def setUp(self) -> None:
+        self.deposit = DamageDeposit.objects.create(
+            guest_name="Lena Hoffmann", amount=Decimal("1.00"), currency="USD",
+            paypal_order_id="ORDER-9",
+        )
+
+    def test_the_stamp_follows_the_call_not_the_creation(self) -> None:
+        self.assertEqual(self.deposit.environment, "sandbox")
+        with override_settings(PAYPAL_ENV="live"):
+            with patch("concierge.paypal.authorize_order", return_value=_authorization()):
+                self.client.post(f"{self.deposit.path()}authorize/")
+        self.deposit.refresh_from_db()
+        self.assertEqual(self.deposit.environment, "live")
+
+    def test_creating_the_order_restamps_it_too(self) -> None:
+        with override_settings(PAYPAL_ENV="live"):
+            with patch("concierge.paypal.create_order", return_value={"id": "O-1"}):
+                self.client.post(f"{self.deposit.path()}order/")
+        self.deposit.refresh_from_db()
+        self.assertEqual(self.deposit.environment, "live")
+
+    def test_a_live_hold_cannot_be_released_through_sandbox(self) -> None:
+        """The id does not exist there; the call would fail and leave it held."""
+        from concierge.admin import _wrong_environment
+
+        self.deposit.environment = "live"
+        self.assertIn("PAYPAL_ENV is now sandbox", _wrong_environment(self.deposit))
+        with override_settings(PAYPAL_ENV="live"):
+            self.assertEqual(_wrong_environment(self.deposit), "")
+
+
 class DepositClockTests(TestCase):
     """PayPal's 3-day and 29-day windows, which decide when a hold is useful."""
 

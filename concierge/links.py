@@ -15,6 +15,29 @@ from .affiliate import viator_url
 
 LANGUAGES = ("en", "es", "fr")
 
+# What each language is called in itself, for the admin's dropdown — a host
+# picking the guest's language should read "Français", not "FR".
+LANGUAGE_LABELS = (
+    ("en", "English"),
+    ("es", "Español"),
+    ("fr", "Français"),
+)
+
+
+def normalize_language(value: str) -> str:
+    """Coerce anything to a language this site actually renders.
+
+    One place, because the deposit page takes a language from three sources —
+    the URL, the stored record, and the default — and a code that slips
+    through unvalidated renders a page with every translated string missing.
+    """
+    value = (value or "").strip().lower()
+    # "es-419", "fr-CA" and "en-GB" all arrive from real browsers and booking
+    # systems; the base language is what we have copy for.
+    base = value.split("-")[0]
+    return base if base in LANGUAGES else "en"
+
+
 # "Staying at" reads right for somewhere you sleep and wrong for a supermarket.
 _STAYING_KINDS = {"apartment", "hotel", "residence"}
 
@@ -83,3 +106,40 @@ def destination(service, location, site, *, lang: str, force_whatsapp: bool, bus
     if not force_whatsapp and referrals_on and service.uses_referral_link:
         return referral_destination(service, location, site)
     return whatsapp_url(service, location, lang, business_number)
+
+
+# --- damage deposits ------------------------------------------------------
+
+_DEPOSIT_TEMPLATES = {
+    "en": (
+        "Hi {guest}, this is {host}. Before check-in we hold a refundable "
+        "{currency} {amount} security deposit. Your card is not charged — PayPal "
+        "only reserves it, and we release it after check-out: {url}"
+    ),
+    "es": (
+        "Hola {guest}, soy {host}. Antes de la entrada retenemos un depósito de "
+        "garantía reembolsable de {currency} {amount}. No se cobra nada a tu "
+        "tarjeta — PayPal solo lo reserva, y lo liberamos tras la salida: {url}"
+    ),
+    "fr": (
+        "Bonjour {guest}, ici {host}. Avant l'arrivée nous bloquons une caution "
+        "remboursable de {currency} {amount}. Votre carte n'est pas débitée — "
+        "PayPal ne fait que la réserver, et nous la libérons après le départ : {url}"
+    ),
+}
+
+
+def deposit_message(deposit, url: str, host_name: str) -> str:
+    """The WhatsApp text asking a guest for their deposit, in their language.
+
+    Lives here with the other guest-facing copy rather than in the admin, so
+    the wording a guest receives is not buried in a view.
+    """
+    lang = normalize_language(getattr(deposit, "language", ""))
+    return _DEPOSIT_TEMPLATES[lang].format(
+        guest=deposit.guest_name,
+        host=host_name,
+        currency=deposit.currency,
+        amount=f"{deposit.amount:.2f}",
+        url=url,
+    )

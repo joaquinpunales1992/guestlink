@@ -22,7 +22,7 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 
 from . import paypal, qr, qr_pdf
-from .links import LANGUAGES, destination, place_name
+from .links import LANGUAGE_LABELS, LANGUAGES, destination, normalize_language, place_name
 from .models import (
     DamageDeposit,
     Location,
@@ -398,8 +398,10 @@ def deposit(request: HttpRequest, token: str) -> HttpResponse:
     """
     record = get_object_or_404(DamageDeposit, token=token)
     site = SiteSettings.load()
-    lang = request.GET.get("lang", "en")
-    lang = lang if lang in LANGUAGES else "en"
+    # The guest's own choice wins; otherwise the language the host recorded for
+    # them, so a link pasted into Booking.com opens already translated without
+    # the host having to remember to append ?lang=.
+    lang = normalize_language(request.GET.get("lang") or record.language)
 
     return render(
         request,
@@ -409,6 +411,7 @@ def deposit(request: HttpRequest, token: str) -> HttpResponse:
             "site": site,
             "lang": lang,
             "terms": _deposit_terms(site, lang),
+            "languages": LANGUAGE_LABELS,
             "host_name": settings.HOST_NAME,
             "can_pay": record.status in _DEPOSIT_OPEN and paypal.is_configured(),
             "already_held": record.status == DamageDeposit.Status.HELD,

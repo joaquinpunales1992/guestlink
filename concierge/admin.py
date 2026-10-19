@@ -8,7 +8,7 @@ from django.http import HttpResponseRedirect
 from django.shortcuts import render
 from django.utils import timezone
 from django.urls import reverse
-from django.utils.html import format_html
+from django.utils.html import format_html, format_html_join
 
 from django import forms
 
@@ -27,6 +27,7 @@ from .models import (
     Ticket,
 )
 from . import paypal
+from .links import LANGUAGES, deposit_message
 from .referral_preview import PreviewError, fetch_preview, points_at_a_listing
 from .translate import TranslationError, fill_missing_names
 
@@ -809,10 +810,10 @@ def _wrong_environment(record: DamageDeposit) -> str:
 @admin.register(DamageDeposit)
 class DamageDepositAdmin(admin.ModelAdmin):
     list_display = (
-        "guest_name", "booking_reference", "held_amount", "state",
+        "guest_name", "booking_reference", "language", "held_amount", "state",
         "clock", "check_out", "env", "created_at",
     )
-    list_filter = (DepositStateFilter, "status", "location", "environment")
+    list_filter = (DepositStateFilter, "status", "language", "location", "environment")
     search_fields = ("guest_name", "booking_reference", "guest_email", "guest_phone", "notes")
     date_hierarchy = "created_at"
     actions = ["mark_sent", "send_link_whatsapp", "release_holds", "reauthorize_holds", "refresh_from_paypal"]
@@ -827,7 +828,8 @@ class DamageDepositAdmin(admin.ModelAdmin):
             "The guest",
             {
                 "fields": (
-                    "guest_name", "booking_reference", "guest_email", "guest_phone",
+                    "guest_name", "booking_reference", "language",
+                    "guest_email", "guest_phone",
                     "location", "check_in", "check_out",
                 ),
             },
@@ -930,13 +932,21 @@ class DamageDepositAdmin(admin.ModelAdmin):
     def deposit_link(self, obj: DamageDeposit) -> str:
         if not obj.pk:
             return "Save first — the link is generated with the deposit."
-        url = obj.path()
+        # The guest's language is already in the link, so pasting it into
+        # Booking.com needs no extra step and cannot be forgotten.
+        url = f"{obj.path()}?lang={obj.language}"
+        others = format_html_join(
+            " · ",
+            '<a href="{}?lang={}" target="_blank">{}</a>',
+            ((obj.path(), code, code.upper()) for code in LANGUAGES if code != obj.language),
+        )
         return format_html(
             '<div><input readonly value="{}" style="width:100%;max-width:560px;padding:7px;'
             'font-family:ui-monospace,monospace" onclick="this.select()">'
-            '<p style="margin:6px 0 0">Paste this into the Booking.com message thread. '
-            '<a href="{}" target="_blank">Open it</a> to see what the guest sees.</p></div>',
-            url, url,
+            '<p style="margin:6px 0 0">Paste this into the Booking.com message thread — '
+            'it opens in {}. <a href="{}" target="_blank">Open it</a> to see what the '
+            'guest sees.<br>Other languages: {}</p></div>',
+            url, obj.get_language_display(), url, others,
         )
 
     @admin.display(description="Where this stands")
@@ -991,13 +1001,8 @@ class DamageDepositAdmin(admin.ModelAdmin):
             if not record.guest_phone:
                 skipped += 1
                 continue
-            url = request.build_absolute_uri(record.path())
-            body = (
-                f"Hi {record.guest_name}, this is {settings.HOST_NAME}. "
-                f"Before check-in we hold a refundable {record.currency} {record.amount:.2f} "
-                f"security deposit. Your card is not charged — PayPal only reserves it, "
-                f"and we release it after check-out: {url}"
-            )
+            url = request.build_absolute_uri(f"{record.path()}?lang={record.language}")
+            body = deposit_message(record, url, settings.HOST_NAME)
             try:
                 send_text(record.guest_phone, body)
             except WhatsAppError as exc:

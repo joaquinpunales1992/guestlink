@@ -2130,6 +2130,72 @@ class DepositEnvironmentTests(TestCase):
             self.assertEqual(_wrong_environment(self.deposit), "")
 
 
+@override_settings(PAYPAL_CLIENT_ID="test-client", PAYPAL_CLIENT_SECRET="test-secret")
+class DepositLanguageTests(TestCase):
+    """The link is pasted into Booking.com as-is, so it must carry the language."""
+
+    def setUp(self) -> None:
+        self.deposit = DamageDeposit.objects.create(
+            guest_name="Lena Hoffmann", amount=Decimal("300.00"), currency="USD",
+            language="fr",
+        )
+
+    def test_the_page_opens_in_the_guests_language_without_a_query(self) -> None:
+        html = self.client.get(self.deposit.path()).content.decode()
+        self.assertIn("réservé, non débité", html)
+        self.assertNotIn("held, not charged", html)
+
+    def test_the_guest_can_still_switch(self) -> None:
+        html = self.client.get(f"{self.deposit.path()}?lang=es").content.decode()
+        self.assertIn("reservado, no cobrado", html)
+
+    def test_the_html_lang_attribute_follows(self) -> None:
+        html = self.client.get(self.deposit.path()).content.decode()
+        self.assertIn('<html lang="fr">', html)
+
+    def test_a_regional_code_falls_back_to_its_base_language(self) -> None:
+        """Booking systems and browsers send es-419, fr-CA, en-GB."""
+        from concierge.links import normalize_language
+
+        self.assertEqual(normalize_language("es-419"), "es")
+        self.assertEqual(normalize_language("fr-CA"), "fr")
+        self.assertEqual(normalize_language("de"), "en")
+        self.assertEqual(normalize_language(""), "en")
+        self.assertEqual(normalize_language("  ES  "), "es")
+
+    def test_an_unknown_lang_in_the_url_does_not_blank_the_page(self) -> None:
+        html = self.client.get(f"{self.deposit.path()}?lang=zz").content.decode()
+        self.assertIn("held, not charged", html)
+
+    def test_the_admin_link_carries_the_language(self) -> None:
+        from concierge.admin import DamageDepositAdmin
+
+        model_admin = DamageDepositAdmin(DamageDeposit, admin.site)
+        box = model_admin.deposit_link(self.deposit)
+        self.assertIn(f"{self.deposit.path()}?lang=fr", box)
+        # and offers the others, so a wrongly-recorded language is one click away
+        self.assertIn("lang=en", box)
+        self.assertIn("lang=es", box)
+
+    def test_the_whatsapp_message_is_in_the_guests_language(self) -> None:
+        from concierge.links import deposit_message
+
+        body = deposit_message(self.deposit, "https://x/deposit/t/?lang=fr", "Joaquin")
+        self.assertIn("caution", body)
+        self.assertIn("Lena Hoffmann", body)
+        self.assertIn("USD 300.00", body)
+        self.assertNotIn("security deposit", body)
+
+    def test_every_language_has_a_whatsapp_template(self) -> None:
+        from concierge.links import LANGUAGES, deposit_message
+
+        for code in LANGUAGES:
+            self.deposit.language = code
+            body = deposit_message(self.deposit, "https://x/", "Joaquin")
+            self.assertIn("Lena Hoffmann", body)
+            self.assertIn("https://x/", body)
+
+
 class DepositClockTests(TestCase):
     """PayPal's 3-day and 29-day windows, which decide when a hold is useful."""
 

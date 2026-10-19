@@ -164,7 +164,10 @@
     <footer>
       {{ host_name }} · <a href="/privacy/">{% if lang == "es" %}Privacidad{% elif lang == "fr" %}Confidentialité{% else %}Privacy{% endif %}</a>
       <br>
-      <a href="?lang=en">EN</a> · <a href="?lang=es">ES</a> · <a href="?lang=fr">FR</a>
+      {% for code, label in languages %}
+        {% if code == lang %}<strong>{{ label }}</strong>{% else %}<a href="?lang={{ code }}">{{ label }}</a>{% endif %}
+        {% if not forloop.last %} · {% endif %}
+      {% endfor %}
     </footer>
   </main>
 

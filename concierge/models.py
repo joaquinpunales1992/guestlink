@@ -10,6 +10,7 @@ from django.db import models
 from django.utils import timezone
 
 from .affiliate import CAMPAIGN_RE
+from .links import LANGUAGE_LABELS
 
 
 def normalize_phone(phone: str) -> str:
@@ -827,6 +828,15 @@ class DamageDeposit(models.Model):
         help_text="The Booking.com confirmation number, so a hold can be traced back to a stay.",
     )
     guest_email = models.EmailField(blank=True)
+    language = models.CharField(
+        max_length=5,
+        choices=LANGUAGE_LABELS,
+        default="en",
+        help_text=(
+            "What the guest speaks. The link opens in this language and the WhatsApp "
+            "message is written in it. They can still switch on the page."
+        ),
+    )
     guest_phone = models.CharField(
         max_length=20,
         blank=True,

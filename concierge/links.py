@@ -118,19 +118,30 @@ def destination(service, location, site, *, lang: str, force_whatsapp: bool, bus
 _GUEST_MESSAGES = {
     "deposit": {
         "en": (
-            "Hi {guest}, this is {host}. Before check-in we hold a refundable "
-            "{currency} {amount} security deposit. Your card is not charged — PayPal "
-            "only reserves it, and we release it after check-out: {url}"
+            "Hi {guest}, how are you? Your stay in Bayahibe is just around the corner!\n\n"
+            "Here’s the link to authorize the damage deposit:\n"
+            "{url}\n\n"
+            "The deposit is fully refunded once we check the apartment after checkout day.\n\n"
+            "Let me know if you have any questions. See you soon!\n"
+            "{host}"
         ),
         "es": (
-            "Hola {guest}, soy {host}. Antes de la entrada retenemos un depósito de "
-            "garantía reembolsable de {currency} {amount}. No se cobra nada a tu "
-            "tarjeta — PayPal solo lo reserva, y lo liberamos tras la salida: {url}"
+            "Hola {guest}, ¿cómo estás? ¡Ya falta poco para tu estadía en Bayahibe!\n\n"
+            "A continuación te compartimos el link donde puedes autorizar el depósito por daños:\n"
+            "{url}\n\n"
+            "El depósito se reintegra por completo una vez revisamos el apartamento después "
+            "del día del checkout.\n\n"
+            "¡Cualquier duda me escribes! Nos vemos pronto.\n"
+            "{host}"
         ),
         "fr": (
-            "Bonjour {guest}, ici {host}. Avant l'arrivée nous bloquons une caution "
-            "remboursable de {currency} {amount}. Votre carte n'est pas débitée — "
-            "PayPal ne fait que la réserver, et nous la libérons après le départ : {url}"
+            "Bonjour {guest}, comment allez-vous ? Votre séjour à Bayahibe approche !\n\n"
+            "Voici le lien pour autoriser le dépôt de garantie :\n"
+            "{url}\n\n"
+            "Le dépôt vous sera intégralement restitué une fois l’appartement vérifié après "
+            "le jour du départ.\n\n"
+            "N’hésitez pas à m’écrire si vous avez des questions. À très bientôt !\n"
+            "{host}"
         ),
     },
     "booking": {

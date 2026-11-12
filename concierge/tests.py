@@ -2398,18 +2398,18 @@ class DepositLanguageTests(TestCase):
     def test_the_admin_shows_the_message_ready_to_paste(self) -> None:
         html = self._admin_page()
         self.assertIn('id="guest-message-text"', html)
-        self.assertIn("Bonjour Lena Hoffmann, ici Joaquin", html)
+        self.assertIn("Bonjour Lena Hoffmann, comment allez-vous ?", html)
         # the message carries the full link, not just the path
-        self.assertIn(f"http://testserver{self.deposit.path()}?lang=fr</textarea>", html)
+        self.assertIn(f"\nhttp://testserver{self.deposit.path()}?lang=fr\n", html)
 
     def test_the_whatsapp_message_is_in_the_guests_language(self) -> None:
         from concierge.links import deposit_message
 
-        body = deposit_message(self.deposit, "https://x/deposit/t/?lang=fr", "Joaquin")
-        self.assertIn("caution", body)
-        self.assertIn("Lena Hoffmann", body)
-        self.assertIn("USD 300.00", body)
-        self.assertNotIn("security deposit", body)
+        body = deposit_message(self.deposit, "https://x/deposit/t/?lang=fr", "Joaquín")
+        self.assertIn("Bonjour Lena Hoffmann", body)
+        self.assertIn("dépôt de garantie", body)
+        self.assertTrue(body.endswith("Joaquín"))
+        self.assertNotIn("damage deposit", body)
 
     def test_every_language_has_a_whatsapp_template(self) -> None:
         from concierge.links import LANGUAGES, deposit_message

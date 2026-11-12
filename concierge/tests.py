@@ -2131,6 +2131,7 @@ class DepositEnvironmentTests(TestCase):
 
 
 @override_settings(PAYPAL_CLIENT_ID="test-client", PAYPAL_CLIENT_SECRET="test-secret")
+@override_settings(STORAGES=PLAIN_STATIC)
 class DepositLanguageTests(TestCase):
     """The link is pasted into Booking.com as-is, so it must carry the language."""
 
@@ -2167,15 +2168,26 @@ class DepositLanguageTests(TestCase):
         html = self.client.get(f"{self.deposit.path()}?lang=zz").content.decode()
         self.assertIn("held, not charged", html)
 
-    def test_the_admin_link_carries_the_language(self) -> None:
-        from concierge.admin import DamageDepositAdmin
+    def _admin_page(self) -> str:
+        User = get_user_model()
+        self.client.force_login(User.objects.create_superuser("boss", "boss@example.com", "pw"))
+        return self.client.get(f"/admin/concierge/damagedeposit/{self.deposit.pk}/change/").content.decode()
 
-        model_admin = DamageDepositAdmin(DamageDeposit, admin.site)
-        box = model_admin.deposit_link(self.deposit)
-        self.assertIn(f"{self.deposit.path()}?lang=fr", box)
+    def test_the_admin_link_carries_the_language(self) -> None:
+        html = self._admin_page()
+        # Absolute: a bare path pasted into Booking.com is not a link.
+        self.assertIn(f"http://testserver{self.deposit.path()}?lang=fr", html)
         # and offers the others, so a wrongly-recorded language is one click away
-        self.assertIn("lang=en", box)
-        self.assertIn("lang=es", box)
+        self.assertIn("lang=en", html)
+        self.assertIn("lang=es", html)
+
+    @override_settings(HOST_NAME="Joaquin")
+    def test_the_admin_shows_the_message_ready_to_paste(self) -> None:
+        html = self._admin_page()
+        self.assertIn('id="guest-message-text"', html)
+        self.assertIn("Bonjour Lena Hoffmann, ici Joaquin", html)
+        # the message carries the full link, not just the path
+        self.assertIn(f"http://testserver{self.deposit.path()}?lang=fr</textarea>", html)
 
     def test_the_whatsapp_message_is_in_the_guests_language(self) -> None:
         from concierge.links import deposit_message

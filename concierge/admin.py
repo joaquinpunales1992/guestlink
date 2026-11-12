@@ -819,7 +819,7 @@ class DamageDepositAdmin(admin.ModelAdmin):
     actions = ["mark_sent", "send_link_whatsapp", "release_holds", "reauthorize_holds", "refresh_from_paypal"]
 
     readonly_fields = (
-        "token", "deposit_link", "status", "paypal_order_id", "paypal_authorization_id",
+        "token", "status", "paypal_order_id", "paypal_authorization_id",
         "paypal_capture_id", "expires_at", "authorized_at", "resolved_at",
         "captured_amount", "environment", "created_at", "last_error", "lifecycle",
     )
@@ -837,7 +837,7 @@ class DamageDepositAdmin(admin.ModelAdmin):
         (
             "The hold",
             {
-                "fields": ("amount", "currency", "status", "lifecycle", "deposit_link", "sent_at"),
+                "fields": ("amount", "currency", "status", "lifecycle", "sent_at"),
                 "description": (
                     "The amount is copied from Site settings when the deposit is created "
                     "and then fixed, so changing the site-wide figure never alters a hold "
@@ -928,34 +928,13 @@ class DamageDepositAdmin(admin.ModelAdmin):
             return format_html('<span style="color:#1e7b34;font-weight:600">live</span>')
         return format_html('<span style="color:#d9694a;font-weight:600">sandbox</span>')
 
-    @admin.display(description="Link to send the guest")
-    def deposit_link(self, obj: DamageDeposit) -> str:
-        if not obj.pk:
-            return "Save first — the link is generated with the deposit."
-        # The guest's language is already in the link, so pasting it into
-        # Booking.com needs no extra step and cannot be forgotten.
-        url = f"{obj.path()}?lang={obj.language}"
-        others = format_html_join(
-            " · ",
-            '<a href="{}?lang={}" target="_blank">{}</a>',
-            ((obj.path(), code, code.upper()) for code in LANGUAGES if code != obj.language),
-        )
-        return format_html(
-            '<div><input readonly value="{}" style="width:100%;max-width:560px;padding:7px;'
-            'font-family:ui-monospace,monospace" onclick="this.select()">'
-            '<p style="margin:6px 0 0">Paste this into the Booking.com message thread — '
-            'it opens in {}. <a href="{}" target="_blank">Open it</a> to see what the '
-            'guest sees.<br>Other languages: {}</p></div>',
-            url, obj.get_language_display(), url, others,
-        )
-
     @admin.display(description="Where this stands")
     def lifecycle(self, obj: DamageDeposit) -> str:
         """Plain English about PayPal's clock, which the status alone hides."""
         if not obj.pk:
             return "—"
         if obj.status == DamageDeposit.Status.DRAFT:
-            return "Not sent yet. Copy the link below into the Booking.com thread."
+            return "Not sent yet. Copy the message at the top of this page to the guest."
         if obj.status == DamageDeposit.Status.SENT:
             return "Waiting for the guest to approve. Nothing is held."
         if obj.status == DamageDeposit.Status.FAILED:
@@ -1101,10 +1080,30 @@ class DamageDepositAdmin(admin.ModelAdmin):
             ),
         ] + super().get_urls()
 
+    def _guest_message_context(self, request, record: DamageDeposit) -> dict:
+        """The link and the ready-to-paste message, shown above the form.
+
+        Built here rather than in a readonly field because only the view has
+        the request, and the link has to be absolute: a bare path pasted into
+        Booking.com is not a link at all.
+        """
+        url = request.build_absolute_uri(f"{record.path()}?lang={record.language}")
+        return {
+            "guest_url": url,
+            "guest_message": deposit_message(record, url, settings.HOST_NAME),
+            "guest_language": record.get_language_display(),
+            "other_languages": [
+                (code.upper(), request.build_absolute_uri(f"{record.path()}?lang={code}"))
+                for code in LANGUAGES if code != record.language
+            ],
+        }
+
     def change_view(self, request, object_id, form_url="", extra_context=None):
         """Offer the capture page from the deposit, but only while one is held."""
         record = self.get_object(request, object_id)
         extra_context = extra_context or {}
+        if record:
+            extra_context.update(self._guest_message_context(request, record))
         if record and record.is_held:
             extra_context["capture_url"] = reverse(
                 "admin:concierge_damagedeposit_capture", args=[record.pk]

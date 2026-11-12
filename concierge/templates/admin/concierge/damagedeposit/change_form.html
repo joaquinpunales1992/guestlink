@@ -16,3 +16,51 @@
   {% endif %}
   {{ block.super }}
 {% endblock %}
+
+{# What to send the guest, built in DamageDepositAdmin._guest_message_context.
+   Above the form because it is the first thing needed after saving. #}
+{% block form_top %}
+  {% if guest_message %}
+    <fieldset class="module aligned" id="guest-message">
+      <h2>Send this to the guest</h2>
+      <div class="form-row">
+        <p style="margin:0 0 6px">
+          Message in {{ guest_language }} — paste it into the Booking.com thread or WhatsApp.
+        </p>
+        <textarea id="guest-message-text" readonly rows="5"
+                  style="width:100%;max-width:640px;padding:8px;font:inherit">{{ guest_message }}</textarea>
+        <p style="margin:8px 0 0">
+          <button type="button" class="button" data-copy="guest-message-text">Copy message</button>
+          <button type="button" class="button" data-copy="guest-link-text">Copy link only</button>
+          <a href="{{ guest_url }}" target="_blank" style="margin-left:8px">Open it</a> to see what the guest sees.
+        </p>
+        <input id="guest-link-text" readonly value="{{ guest_url }}"
+               style="width:100%;max-width:640px;margin-top:8px;padding:6px;font-family:ui-monospace,monospace">
+        <p style="margin:6px 0 0">
+          Link in another language:
+          {% for code, url in other_languages %}<a href="{{ url }}" target="_blank">{{ code }}</a>{% if not forloop.last %} · {% endif %}{% endfor %}
+          — to change the message's language, change “Language” below and save.
+        </p>
+      </div>
+    </fieldset>
+    <script>
+      document.querySelectorAll("#guest-message [data-copy]").forEach(function (button) {
+        button.addEventListener("click", function () {
+          var field = document.getElementById(button.dataset.copy);
+          var label = button.textContent;
+          var done = function () {
+            button.textContent = "Copied ✓";
+            setTimeout(function () { button.textContent = label; }, 1500);
+          };
+          field.select();
+          if (navigator.clipboard) {
+            navigator.clipboard.writeText(field.value).then(done, function () { document.execCommand("copy"); done(); });
+          } else {
+            document.execCommand("copy");
+            done();
+          }
+        });
+      });
+    </script>
+  {% endif %}
+{% endblock %}

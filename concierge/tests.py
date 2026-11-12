@@ -2292,15 +2292,22 @@ class GuestMessageTests(TestCase):
                 self.assertIn("Lena", body)
                 self.assertIn("https://x/deposit/t/", body)
 
-    def test_booking_and_deposit_says_which_is_charged(self) -> None:
+    def test_booking_and_deposit_asks_for_both(self) -> None:
         body = self._message(DamageDeposit.Kind.BOTH, "es")
-        self.assertIn("USD 480.00 — esto se cobra", body)
-        self.assertIn("USD 200.00 — no se cobra", body)
+        self.assertIn("realizar el pago de tu reserva y autorizar el depósito por daños", body)
+        self.assertIn("El depósito se reintegra por completo", body)
 
     def test_booking_only_mentions_no_deposit(self) -> None:
         body = self._message(DamageDeposit.Kind.BOOKING)
-        self.assertIn("USD 480.00", body)
+        self.assertIn("complete the payment for your booking", body)
         self.assertNotIn("deposit", body.replace("/deposit/", ""))
+
+    def test_no_message_is_signed(self) -> None:
+        from concierge.links import LANGUAGES
+
+        for kind in DamageDeposit.Kind.values:
+            for lang in LANGUAGES:
+                self.assertNotIn("Joaquin", self._message(kind, lang))
 
 
 @override_settings(PAYPAL_CLIENT_ID="test-client", PAYPAL_CLIENT_SECRET="test-secret")

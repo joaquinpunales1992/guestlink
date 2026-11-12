@@ -2408,7 +2408,9 @@ class DepositLanguageTests(TestCase):
         body = deposit_message(self.deposit, "https://x/deposit/t/?lang=fr", "Joaquín")
         self.assertIn("Bonjour Lena Hoffmann", body)
         self.assertIn("dépôt de garantie", body)
-        self.assertTrue(body.endswith("Joaquín"))
+        # Unsigned on purpose: the host asked for the name to be left out.
+        self.assertNotIn("Joaquín", body)
+        self.assertTrue(body.endswith("À très bientôt !"))
         self.assertNotIn("damage deposit", body)
 
     def test_every_language_has_a_whatsapp_template(self) -> None:

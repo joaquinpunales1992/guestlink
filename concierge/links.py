@@ -122,8 +122,7 @@ _GUEST_MESSAGES = {
             "Here’s the link to authorize the damage deposit:\n"
             "{url}\n\n"
             "The deposit is fully refunded once we check the apartment after checkout day.\n\n"
-            "Let me know if you have any questions. See you soon!\n"
-            "{host}"
+            "Let me know if you have any questions. See you soon!"
         ),
         "es": (
             "Hola {guest}, ¿cómo estás? ¡Ya falta poco para tu estadía en Bayahibe!\n\n"
@@ -131,8 +130,7 @@ _GUEST_MESSAGES = {
             "{url}\n\n"
             "El depósito se reintegra por completo una vez revisamos el apartamento después "
             "del día del checkout.\n\n"
-            "¡Cualquier duda me escribes! Nos vemos pronto.\n"
-            "{host}"
+            "¡Cualquier duda me escribes! Nos vemos pronto."
         ),
         "fr": (
             "Bonjour {guest}, comment allez-vous ? Votre séjour à Bayahibe approche !\n\n"
@@ -140,45 +138,60 @@ _GUEST_MESSAGES = {
             "{url}\n\n"
             "Le dépôt vous sera intégralement restitué une fois l’appartement vérifié après "
             "le jour du départ.\n\n"
-            "N’hésitez pas à m’écrire si vous avez des questions. À très bientôt !\n"
-            "{host}"
+            "N’hésitez pas à m’écrire si vous avez des questions. À très bientôt !"
         ),
     },
     "booking": {
         "en": (
-            "Hi {guest}, this is {host}. Here is the link to pay your booking, "
-            "{currency} {booking}, securely through PayPal: {url}"
+            "Hi {guest}, how are you? Thank you for booking your stay in Bayahibe!\n\n"
+            "Here’s the link to pay your booking ({currency} {booking}) securely through PayPal:\n"
+            "{url}\n\n"
+            "Let me know if you have any questions. See you soon!"
         ),
         "es": (
-            "Hola {guest}, soy {host}. Aquí tienes el enlace para pagar tu reserva, "
-            "{currency} {booking}, de forma segura con PayPal: {url}"
+            "Hola {guest}, ¿cómo estás? ¡Gracias por reservar tu estadía en Bayahibe!\n\n"
+            "A continuación te compartimos el link para pagar tu reserva ({currency} {booking}) "
+            "de forma segura con PayPal:\n"
+            "{url}\n\n"
+            "¡Cualquier duda me escribes! Nos vemos pronto."
         ),
         "fr": (
-            "Bonjour {guest}, ici {host}. Voici le lien pour régler votre réservation, "
-            "{currency} {booking}, en toute sécurité avec PayPal : {url}"
+            "Bonjour {guest}, comment allez-vous ? Merci d’avoir réservé votre séjour à Bayahibe !\n\n"
+            "Voici le lien pour régler votre réservation ({currency} {booking}) en toute "
+            "sécurité avec PayPal :\n"
+            "{url}\n\n"
+            "N’hésitez pas à m’écrire si vous avez des questions. À très bientôt !"
         ),
     },
     "both": {
         "en": (
-            "Hi {guest}, this is {host}. Here is the link for your stay. It has two steps:\n"
+            "Hi {guest}, how are you? Your stay in Bayahibe is just around the corner!\n\n"
+            "Here’s the link to complete your booking. It takes two steps:\n"
             "1. Booking payment: {currency} {booking} — this is charged.\n"
-            "2. Refundable security deposit: {currency} {amount} — not charged. PayPal "
-            "only reserves it, and we release it after check-out.\n"
-            "{url}"
+            "2. Damage deposit: {currency} {amount} — not charged, only authorized.\n"
+            "{url}\n\n"
+            "The deposit is fully refunded once we check the apartment after checkout day.\n\n"
+            "Let me know if you have any questions. See you soon!"
         ),
         "es": (
-            "Hola {guest}, soy {host}. Aquí tienes el enlace para tu estancia. Tiene dos pasos:\n"
+            "Hola {guest}, ¿cómo estás? ¡Ya falta poco para tu estadía en Bayahibe!\n\n"
+            "A continuación te compartimos el link para completar tu reserva. Son dos pasos:\n"
             "1. Pago de la reserva: {currency} {booking} — esto se cobra.\n"
-            "2. Depósito de garantía reembolsable: {currency} {amount} — no se cobra. "
-            "PayPal solo lo reserva, y lo liberamos tras la salida.\n"
-            "{url}"
+            "2. Depósito por daños: {currency} {amount} — no se cobra, solo queda autorizado.\n"
+            "{url}\n\n"
+            "El depósito se reintegra por completo una vez revisamos el apartamento después "
+            "del día del checkout.\n\n"
+            "¡Cualquier duda me escribes! Nos vemos pronto."
         ),
         "fr": (
-            "Bonjour {guest}, ici {host}. Voici le lien pour votre séjour, en deux étapes :\n"
+            "Bonjour {guest}, comment allez-vous ? Votre séjour à Bayahibe approche !\n\n"
+            "Voici le lien pour finaliser votre réservation, en deux étapes :\n"
             "1. Paiement de la réservation : {currency} {booking} — ce montant est débité.\n"
-            "2. Caution remboursable : {currency} {amount} — non débitée. PayPal ne fait "
-            "que la réserver, et nous la libérons après le départ.\n"
-            "{url}"
+            "2. Dépôt de garantie : {currency} {amount} — non débité, seulement autorisé.\n"
+            "{url}\n\n"
+            "Le dépôt vous sera intégralement restitué une fois l’appartement vérifié après "
+            "le jour du départ.\n\n"
+            "N’hésitez pas à m’écrire si vous avez des questions. À très bientôt !"
         ),
     },
 }

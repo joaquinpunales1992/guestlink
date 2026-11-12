@@ -810,16 +810,19 @@ def _wrong_environment(record: DamageDeposit) -> str:
 @admin.register(DamageDeposit)
 class DamageDepositAdmin(admin.ModelAdmin):
     list_display = (
-        "guest_name", "booking_reference", "language", "held_amount", "state",
+        "guest_name", "booking_reference", "kind", "booking_state", "held_amount", "state",
         "clock", "check_out", "env", "created_at",
     )
-    list_filter = (DepositStateFilter, "status", "language", "location", "environment")
+    list_filter = (
+        DepositStateFilter, "kind", "booking_status", "status", "language", "location", "environment",
+    )
     search_fields = ("guest_name", "booking_reference", "guest_email", "guest_phone", "notes")
     date_hierarchy = "created_at"
     actions = ["mark_sent", "send_link_whatsapp", "release_holds", "reauthorize_holds", "refresh_from_paypal"]
 
     readonly_fields = (
-        "token", "status", "paypal_order_id", "paypal_authorization_id",
+        "token", "status", "booking_status", "booking_order_id", "booking_capture_id",
+        "booking_paid_at", "paypal_order_id", "paypal_authorization_id",
         "paypal_capture_id", "expires_at", "authorized_at", "resolved_at",
         "captured_amount", "environment", "created_at", "last_error", "lifecycle",
     )
@@ -835,13 +838,35 @@ class DamageDepositAdmin(admin.ModelAdmin):
             },
         ),
         (
-            "The hold",
+            "What the link asks for",
             {
-                "fields": ("amount", "currency", "status", "lifecycle", "sent_at"),
+                "fields": ("kind", "currency", "lifecycle", "sent_at"),
                 "description": (
-                    "The amount is copied from Site settings when the deposit is created "
-                    "and then fixed, so changing the site-wide figure never alters a hold "
-                    "a guest has already agreed to."
+                    "Deposit only: the deposit is held, nothing is charged. Booking payment "
+                    "only: the booking is charged. Booking + deposit: one link, two steps — "
+                    "the booking is charged first, then the deposit is held."
+                ),
+            },
+        ),
+        (
+            "The booking payment",
+            {
+                "fields": ("booking_amount", "booking_status"),
+                "description": (
+                    "Charged when the guest approves. Leave at 0 for a deposit-only link. "
+                    "Refunds are done from PayPal's own dashboard."
+                ),
+            },
+        ),
+        (
+            "The deposit",
+            {
+                "fields": ("amount", "status"),
+                "description": (
+                    "Only held, never charged unless you claim it for damage. The amount is "
+                    "copied from Site settings when the link is created and then fixed, so "
+                    "changing the site-wide figure never alters a hold a guest has already "
+                    "agreed to. Ignored on a booking-only link."
                 ),
             },
         ),
@@ -851,7 +876,8 @@ class DamageDepositAdmin(admin.ModelAdmin):
             {
                 "classes": ("collapse",),
                 "fields": (
-                    "environment", "paypal_order_id", "paypal_authorization_id",
+                    "environment", "booking_order_id", "booking_capture_id", "booking_paid_at",
+                    "paypal_order_id", "paypal_authorization_id",
                     "paypal_capture_id", "captured_amount", "authorized_at",
                     "expires_at", "resolved_at", "last_error", "token", "created_at",
                 ),
@@ -866,7 +892,14 @@ class DamageDepositAdmin(admin.ModelAdmin):
         # disagree with PayPal.
         if obj and obj.status != DamageDeposit.Status.DRAFT:
             fields += ["amount", "currency"]
-        return fields
+        # Same for the booking once the guest has paid it, and for what the
+        # link asks for once any money has moved: switching a paid link to
+        # "deposit only" would hide a payment the guest has made.
+        if obj and obj.booking_status != DamageDeposit.BookingStatus.UNPAID:
+            fields += ["booking_amount", "currency"]
+        if obj and (obj.booking_settled or obj.status not in DamageDeposit.OPEN_STATUSES):
+            fields += ["kind"]
+        return list(dict.fromkeys(fields))
 
     def get_changeform_initial_data(self, request):
         """Pre-fill a new deposit with the site-wide amount."""
@@ -875,8 +908,30 @@ class DamageDepositAdmin(admin.ModelAdmin):
 
     # --- columns ---------------------------------------------------------
 
-    @admin.display(description="amount", ordering="amount")
+    @admin.display(description="booking", ordering="booking_status")
+    def booking_state(self, obj: DamageDeposit) -> str:
+        if not obj.wants_booking:
+            return "—"
+        colours = {
+            DamageDeposit.BookingStatus.PAID: "#1e7b34",
+            DamageDeposit.BookingStatus.PENDING: "#8a6d00",
+            DamageDeposit.BookingStatus.FAILED: "#b3261e",
+        }
+        label = {
+            DamageDeposit.BookingStatus.UNPAID: "unpaid",
+            DamageDeposit.BookingStatus.PAID: "paid",
+            DamageDeposit.BookingStatus.PENDING: "paid, clearing",
+            DamageDeposit.BookingStatus.FAILED: "failed",
+        }[obj.booking_status]
+        return format_html(
+            '<span style="color:{};font-weight:600">{} {}</span>',
+            colours.get(obj.booking_status, "#143840"), f"{obj.booking_amount:.2f}", label,
+        )
+
+    @admin.display(description="deposit", ordering="amount")
     def held_amount(self, obj: DamageDeposit) -> str:
+        if not obj.wants_deposit:
+            return "—"
         if obj.captured_amount:
             return format_html(
                 "<span title='captured'>{} {} <b>of</b> {}</span>",
@@ -884,8 +939,10 @@ class DamageDepositAdmin(admin.ModelAdmin):
             )
         return f"{obj.currency} {obj.amount:.2f}"
 
-    @admin.display(description="status", ordering="status")
+    @admin.display(description="deposit status", ordering="status")
     def state(self, obj: DamageDeposit) -> str:
+        if not obj.wants_deposit:
+            return "—"
         colours = {
             DamageDeposit.Status.HELD: "#1e7b34",
             DamageDeposit.Status.RELEASED: "#5f7b81",
@@ -930,31 +987,73 @@ class DamageDepositAdmin(admin.ModelAdmin):
 
     @admin.display(description="Where this stands")
     def lifecycle(self, obj: DamageDeposit) -> str:
-        """Plain English about PayPal's clock, which the status alone hides."""
+        """Plain English about where the link stands, booking and deposit both.
+
+        The deposit half is mostly about PayPal's clock, which the status alone
+        hides.
+        """
         if not obj.pk:
             return "—"
-        if obj.status == DamageDeposit.Status.DRAFT:
-            return "Not sent yet. Copy the message at the top of this page to the guest."
-        if obj.status == DamageDeposit.Status.SENT:
-            return "Waiting for the guest to approve. Nothing is held."
-        if obj.status == DamageDeposit.Status.FAILED:
-            return format_html("PayPal declined the hold. <br><code>{}</code>", obj.last_error)
-        if obj.status == DamageDeposit.Status.CLAIMED:
-            return f"Captured {obj.currency} {obj.captured_amount:.2f}. Any remainder was released."
-        if obj.status == DamageDeposit.Status.RELEASED:
-            return "Released. The guest was never charged."
-        if obj.status == DamageDeposit.Status.EXPIRED:
-            return "PayPal expired this hold. Nothing can be captured from it."
+        lines = []
+        if obj.status == DamageDeposit.Status.DRAFT and not obj.booking_settled:
+            lines.append("Not sent yet. Copy the message at the top of this page to the guest.")
+        if obj.wants_booking:
+            lines.append(self._booking_line(obj))
+        if obj.wants_deposit:
+            lines.extend(self._deposit_lines(obj))
+        return format_html("<br>".join("{}" for _ in lines), *lines)
 
-        parts = [f"Holding {obj.currency} {obj.amount:.2f}. Nothing charged."]
+    def _booking_line(self, obj: DamageDeposit) -> str:
+        amount = f"{obj.currency} {obj.booking_amount:.2f}"
+        status = obj.booking_status
+        if status == DamageDeposit.BookingStatus.PAID:
+            return f"Booking: {amount} paid on {obj.booking_paid_at:%d %b %Y}."
+        if status == DamageDeposit.BookingStatus.PENDING:
+            return (
+                f"Booking: {amount} paid, but PayPal is still clearing it — "
+                "check PayPal before counting on it."
+            )
+        if status == DamageDeposit.BookingStatus.FAILED:
+            return f"Booking: PayPal declined the payment. {obj.last_error}"
+        return f"Booking: {amount} not paid yet."
+
+    def _deposit_lines(self, obj: DamageDeposit) -> list:
+        status = obj.status
+        amount = f"{obj.currency} {obj.amount:.2f}"
+        if status in (DamageDeposit.Status.DRAFT, DamageDeposit.Status.SENT):
+            waiting = (
+                "waits for the booking to be paid first" if obj.booking_open
+                else "waiting for the guest to approve"
+            )
+            lines = [f"Deposit: {amount}, {waiting}. Nothing is held."]
+            # The hold dies 29 days after the guest approves. Sent too early,
+            # it is gone by check-out — the quiet failure of this feature.
+            if obj.check_out:
+                latest = timezone.localdate() + datetime.timedelta(days=paypal.VALIDITY_PERIOD_DAYS)
+                if obj.check_out > latest:
+                    lines.append(
+                        f"⚠ Check-out is more than {paypal.VALIDITY_PERIOD_DAYS} days away: a hold "
+                        "approved today expires before then. Send the deposit closer to check-in."
+                    )
+            return lines
+        if status == DamageDeposit.Status.FAILED:
+            return [format_html("Deposit: PayPal declined the hold. <code>{}</code>", obj.last_error)]
+        if status == DamageDeposit.Status.CLAIMED:
+            return [f"Deposit: captured {obj.currency} {obj.captured_amount:.2f}. Any remainder was released."]
+        if status == DamageDeposit.Status.RELEASED:
+            return ["Deposit: released. The guest was never charged for it."]
+        if status == DamageDeposit.Status.EXPIRED:
+            return ["Deposit: PayPal expired this hold. Nothing can be captured from it."]
+
+        lines = [f"Deposit: holding {amount}. Nothing charged."]
         if obj.needs_reauthorization:
-            parts.append(
+            lines.append(
                 f"Past the {paypal.HONOR_PERIOD_DAYS}-day guaranteed window — a capture may "
                 "now fail. Use “Reauthorize” to restart it."
             )
         if not obj.outlasts_the_stay:
-            parts.append("⚠ This hold expires before check-out. Reauthorize before then.")
-        return format_html("<br>".join("{}" for _ in parts), *parts)
+            lines.append("⚠ This hold expires before check-out. Reauthorize before then.")
+        return lines
 
     # --- actions ---------------------------------------------------------
 

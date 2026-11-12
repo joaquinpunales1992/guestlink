@@ -1,8 +1,8 @@
 {% extends "admin/change_form.html" %}
 
-{# The capture page is reachable only from here. DamageDepositAdmin.change_view
+{% comment %} The capture page is reachable only from here. DamageDepositAdmin.change_view
    puts `capture_url` in the context exactly when a hold is live, so the button
-   cannot appear for a deposit with nothing to charge against. #}
+   cannot appear for a deposit with nothing to charge against. {% endcomment %}
 
 {% block object-tools-items %}
   {% if capture_url %}
@@ -17,8 +17,8 @@
   {{ block.super }}
 {% endblock %}
 
-{# What to send the guest, built in DamageDepositAdmin._guest_message_context.
-   Above the form because it is the first thing needed after saving. #}
+{% comment %} What to send the guest, built in DamageDepositAdmin._guest_message_context.
+   Above the form because it is the first thing needed after saving. {% endcomment %}
 {% block form_top %}
   {% if guest_message %}
     <fieldset class="module aligned" id="guest-message">

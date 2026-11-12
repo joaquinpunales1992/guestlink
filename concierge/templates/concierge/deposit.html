@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex, nofollow">
-  <title>{% if lang == "es" %}Depósito de garantía{% elif lang == "fr" %}Caution{% else %}Security deposit{% endif %} · {{ deposit.guest_name }}</title>
+  <title>{% if deposit.kind == "booking" %}{% if lang == "es" %}Pago de la reserva{% elif lang == "fr" %}Paiement de la réservation{% else %}Booking payment{% endif %}{% elif deposit.kind == "both" %}{% if lang == "es" %}Reserva y depósito{% elif lang == "fr" %}Réservation et caution{% else %}Booking and deposit{% endif %}{% else %}{% if lang == "es" %}Depósito de garantía{% elif lang == "fr" %}Caution{% else %}Security deposit{% endif %}{% endif %} · {{ deposit.guest_name }}</title>
   <style>
     :root {
       --petrol: #0d4650; --sea: #17727f; --cream: #f6efe2; --ink: #143840;
@@ -58,6 +58,13 @@
     footer { text-align: center; font-size: 12px; color: var(--muted); line-height: 1.6; }
     footer a { color: var(--sea); }
     #paypal-button-container { min-height: 52px; }
+    .summary dt { color: var(--ink); }
+    .summary .note { display: block; font-size: 12.5px; color: var(--muted); font-weight: 400; }
+    .summary .done { color: var(--green); margin-left: 4px; }
+    .fine { margin: 14px 0 0; font-size: 13px; line-height: 1.5; color: var(--muted); }
+    .charge, .hold { margin: 0 0 14px; font-size: 14px; line-height: 1.5; padding: 10px 12px; border-radius: 10px; }
+    .charge { background: rgba(217, 105, 74, 0.10); }
+    .hold { background: rgba(26, 127, 75, 0.10); }
     .spinner { text-align: center; color: var(--muted); font-size: 14px; padding: 14px; }
   </style>
 </head>
@@ -68,41 +75,98 @@
 
   <div class="hero">
     <p class="eyebrow">
-      {% if lang == "es" %}Depósito de garantía{% elif lang == "fr" %}Caution de séjour{% else %}Security deposit{% endif %}
+      {% if deposit.kind == "booking" %}
+        {% if lang == "es" %}Pago de la reserva{% elif lang == "fr" %}Paiement de la réservation{% else %}Booking payment{% endif %}
+      {% elif deposit.kind == "both" %}
+        {% if lang == "es" %}Pago de la reserva y depósito{% elif lang == "fr" %}Paiement et caution{% else %}Booking payment and deposit{% endif %}
+      {% else %}
+        {% if lang == "es" %}Depósito de garantía{% elif lang == "fr" %}Caution de séjour{% else %}Security deposit{% endif %}
+      {% endif %}
     </p>
     <h1>{{ deposit.guest_name }}</h1>
-    <p class="amount">
-      {{ deposit.currency }} {{ deposit.amount|floatformat:2 }}
-      <small>
-        {% if lang == "es" %}reservado, no cobrado{% elif lang == "fr" %}réservé, non débité{% else %}held, not charged{% endif %}
-      </small>
-    </p>
+    {% if deposit.kind == "booking" %}
+      <p class="amount">
+        {{ deposit.currency }} {{ deposit.booking_amount|floatformat:2 }}
+        <small>{% if lang == "es" %}pago de la reserva{% elif lang == "fr" %}paiement de la réservation{% else %}booking payment{% endif %}</small>
+      </p>
+    {% elif deposit.kind == "deposit" %}
+      <p class="amount">
+        {{ deposit.currency }} {{ deposit.amount|floatformat:2 }}
+        <small>
+          {% if lang == "es" %}reservado, no cobrado{% elif lang == "fr" %}réservé, non débité{% else %}held, not charged{% endif %}
+        </small>
+      </p>
+    {% endif %}
   </div>
 
   <main>
+    {% if deposit.wants_booking and deposit.booking_settled %}
+      <div class="status good">
+        <strong>
+          {% if deposit.booking_status == "pending" %}
+            {% if lang == "es" %}Pago recibido — PayPal todavía lo está procesando.{% elif lang == "fr" %}Paiement reçu — PayPal le traite encore.{% else %}Payment received — PayPal is still processing it.{% endif %}
+          {% else %}
+            {% if lang == "es" %}Tu reserva está pagada.{% elif lang == "fr" %}Votre réservation est réglée.{% else %}Your booking is paid.{% endif %}
+          {% endif %}
+        </strong>
+        {% if step == "deposit" %}
+          {% if lang == "es" %}Falta un paso: el depósito de garantía, más abajo.{% elif lang == "fr" %}Il reste une étape : la caution, ci-dessous.{% else %}One step left: the security deposit, below.{% endif %}
+        {% elif not deposit.wants_deposit %}
+          {% if lang == "es" %}Gracias. Puedes cerrar esta página.{% elif lang == "fr" %}Merci. Vous pouvez fermer cette page.{% else %}Thank you. You can close this page.{% endif %}
+        {% endif %}
+      </div>
+    {% endif %}
+
     {% if already_held %}
       <div class="status good">
         <strong>
           {% if lang == "es" %}Listo — tu depósito está reservado.{% elif lang == "fr" %}C'est fait — votre caution est réservée.{% else %}Done — your deposit is held.{% endif %}
         </strong>
         {% if lang == "es" %}
-          No se ha cobrado nada. Puedes cerrar esta página.
+          No se ha cobrado nada del depósito. Puedes cerrar esta página.
         {% elif lang == "fr" %}
-          Rien n'a été débité. Vous pouvez fermer cette page.
+          Rien n'a été débité sur la caution. Vous pouvez fermer cette page.
         {% else %}
-          Nothing has been charged. You can close this page.
+          Nothing has been charged for the deposit. You can close this page.
         {% endif %}
       </div>
-    {% elif deposit.status == "released" %}
+    {% elif deposit.wants_deposit and deposit.status == "released" %}
       <div class="status good">
         <strong>
           {% if lang == "es" %}Depósito liberado.{% elif lang == "fr" %}Caution libérée.{% else %}Deposit released.{% endif %}
         </strong>
         {% if lang == "es" %}No se cobró nada. Gracias por tu estancia.{% elif lang == "fr" %}Rien n'a été débité. Merci de votre séjour.{% else %}Nothing was charged. Thank you for your stay.{% endif %}
       </div>
-    {% elif deposit.status == "claimed" or deposit.status == "expired" %}
+    {% elif deposit.wants_deposit and deposit.status == "claimed" or deposit.wants_deposit and deposit.status == "expired" %}
       <div class="status">
         {% if lang == "es" %}Este depósito ya está cerrado. Contacta con tu anfitrión si tienes dudas.{% elif lang == "fr" %}Cette caution est clôturée. Contactez votre hôte pour toute question.{% else %}This deposit is closed. Contact your host if you have questions.{% endif %}
+      </div>
+    {% endif %}
+
+    {% if deposit.kind == "both" %}
+      <div class="card">
+        <h2>{% if lang == "es" %}Qué se cobra y qué se retiene{% elif lang == "fr" %}Ce qui est débité, ce qui est réservé{% else %}What is charged, what is held{% endif %}</h2>
+        <dl class="summary">
+          <dt>
+            1. {% if lang == "es" %}Pago de la reserva{% elif lang == "fr" %}Paiement de la réservation{% else %}Booking payment{% endif %}
+            <span class="note">{% if lang == "es" %}se cobra{% elif lang == "fr" %}débité{% else %}charged{% endif %}</span>
+          </dt>
+          <dd>
+            {{ deposit.currency }} {{ deposit.booking_amount|floatformat:2 }}
+            {% if deposit.booking_settled %}<span class="done">✓</span>{% endif %}
+          </dd>
+          <dt>
+            2. {% if lang == "es" %}Depósito de garantía{% elif lang == "fr" %}Caution{% else %}Security deposit{% endif %}
+            <span class="note">{% if lang == "es" %}solo se retiene, no se cobra{% elif lang == "fr" %}seulement réservée, non débitée{% else %}only held, not charged{% endif %}</span>
+          </dt>
+          <dd>
+            {{ deposit.currency }} {{ deposit.amount|floatformat:2 }}
+            {% if already_held %}<span class="done">✓</span>{% endif %}
+          </dd>
+        </dl>
+        <p class="fine">
+          {% if lang == "es" %}Son dos aprobaciones en PayPal, una después de la otra. El depósito se libera tras la salida si no hay daños.{% elif lang == "fr" %}Deux validations PayPal, l'une après l'autre. La caution est libérée après le départ s'il n'y a pas de dégâts.{% else %}Two PayPal approvals, one after the other. The deposit is released after check-out if there is no damage.{% endif %}
+        </p>
       </div>
     {% endif %}
 
@@ -130,8 +194,9 @@
       </dl>
     </div>
 
+    {% if deposit.wants_deposit %}
     <div class="card">
-      <h2>{% if lang == "es" %}Cómo funciona{% elif lang == "fr" %}Comment ça marche{% else %}How this works{% endif %}</h2>
+      <h2>{% if deposit.kind == "both" %}{% if lang == "es" %}Sobre el depósito{% elif lang == "fr" %}À propos de la caution{% else %}About the deposit{% endif %}{% else %}{% if lang == "es" %}Cómo funciona{% elif lang == "fr" %}Comment ça marche{% else %}How this works{% endif %}{% endif %}</h2>
       {% if terms %}<p class="terms">{{ terms }}</p>{% endif %}
       <ul class="points">
         <li>
@@ -145,17 +210,40 @@
         </li>
       </ul>
     </div>
+    {% endif %}
 
     {% if can_pay %}
       <div class="card">
-        <h2>{% if lang == "es" %}Autorizar el depósito{% elif lang == "fr" %}Autoriser la caution{% else %}Authorize the deposit{% endif %}</h2>
+        {% if step == "booking" %}
+          <h2>
+            {% if two_steps %}{% if lang == "es" %}Paso 1 de 2 — {% elif lang == "fr" %}Étape 1 sur 2 — {% else %}Step 1 of 2 — {% endif %}{% endif %}
+            {% if lang == "es" %}Pagar la reserva{% elif lang == "fr" %}Régler la réservation{% else %}Pay your booking{% endif %}
+          </h2>
+          <p class="charge">
+            {% if lang == "es" %}Esto es un pago: se cobran {{ deposit.currency }} {{ deposit.booking_amount|floatformat:2 }} al aprobar.{% elif lang == "fr" %}Ceci est un paiement : {{ deposit.currency }} {{ deposit.booking_amount|floatformat:2 }} sont débités à la validation.{% else %}This is a payment: {{ deposit.currency }} {{ deposit.booking_amount|floatformat:2 }} is charged when you approve.{% endif %}
+          </p>
+        {% else %}
+          <h2>
+            {% if two_steps %}{% if lang == "es" %}Paso 2 de 2 — {% elif lang == "fr" %}Étape 2 sur 2 — {% else %}Step 2 of 2 — {% endif %}{% endif %}
+            {% if lang == "es" %}Autorizar el depósito{% elif lang == "fr" %}Autoriser la caution{% else %}Authorize the deposit{% endif %}
+          </h2>
+          {% if two_steps %}
+            <p class="hold">
+              {% if lang == "es" %}Esto no es un cobro: PayPal solo reserva {{ deposit.currency }} {{ deposit.amount|floatformat:2 }}.{% elif lang == "fr" %}Ceci n'est pas un débit : PayPal réserve seulement {{ deposit.currency }} {{ deposit.amount|floatformat:2 }}.{% else %}This is not a charge: PayPal only reserves {{ deposit.currency }} {{ deposit.amount|floatformat:2 }}.{% endif %}
+            </p>
+          {% endif %}
+        {% endif %}
         <div id="deposit-error" class="status warn" style="display:none"></div>
         <div id="paypal-button-container"></div>
         <div id="deposit-working" class="spinner" style="display:none">
-          {% if lang == "es" %}Reservando…{% elif lang == "fr" %}Réservation en cours…{% else %}Placing the hold…{% endif %}
+          {% if step == "booking" %}
+            {% if lang == "es" %}Procesando el pago…{% elif lang == "fr" %}Paiement en cours…{% else %}Processing the payment…{% endif %}
+          {% else %}
+            {% if lang == "es" %}Reservando…{% elif lang == "fr" %}Réservation en cours…{% else %}Placing the hold…{% endif %}
+          {% endif %}
         </div>
       </div>
-    {% elif not already_held and deposit.status != "released" and deposit.status != "claimed" and deposit.status != "expired" %}
+    {% elif not nothing_left %}
       <div class="status warn">
         {% if lang == "es" %}Este enlace aún no está listo. Contacta con tu anfitrión.{% elif lang == "fr" %}Ce lien n'est pas encore prêt. Contactez votre hôte.{% else %}This link is not ready yet. Please contact your host.{% endif %}
       </div>
@@ -172,8 +260,12 @@
   </main>
 
   {% if can_pay %}
-    {# intent=authorize is what makes this a hold rather than a payment. #}
-    <script src="https://www.paypal.com/sdk/js?client-id={{ paypal_client_id|urlencode }}&intent=authorize&currency={{ deposit.currency|urlencode }}&components=buttons&disable-funding=paylater,credit"></script>
+    {% comment %}
+      The intent decides what approving does: capture is the booking payment,
+      authorize is the deposit hold. One SDK load serves one intent, which is
+      why a two-step link shows one step per page load.
+    {% endcomment %}
+    <script src="https://www.paypal.com/sdk/js?client-id={{ paypal_client_id|urlencode }}&intent={{ paypal_intent }}&currency={{ deposit.currency|urlencode }}&components=buttons&disable-funding=paylater,credit"></script>
     <script>
       (function () {
         var csrfToken = "{{ csrf_token }}";
@@ -216,16 +308,17 @@
 
           createOrder: function () {
             errorBox.style.display = "none";
-            return post("{% url 'deposit_create_order' deposit.token %}").then(function (data) {
+            return post("{% if step == 'booking' %}{% url 'booking_create_order' deposit.token %}{% else %}{% url 'deposit_create_order' deposit.token %}{% endif %}").then(function (data) {
               return data.id;
             });
           },
 
-          // The hold is placed server-side: the browser only tells us the guest
-          // approved, and the order id we authorize comes from the database.
+          // The payment or hold happens server-side: the browser only tells us
+          // the guest approved, and the order id we act on comes from the
+          // database. Reloading moves a two-step link on to its next step.
           onApprove: function () {
             working.style.display = "block";
-            return post("{% url 'deposit_authorize' deposit.token %}")
+            return post("{% if step == 'booking' %}{% url 'booking_capture' deposit.token %}{% else %}{% url 'deposit_authorize' deposit.token %}{% endif %}")
               .then(function () {
                 window.location.reload();
               })

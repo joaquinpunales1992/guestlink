@@ -10,6 +10,7 @@ import datetime
 import html as html_lib
 import importlib
 import json
+import re
 from io import BytesIO, StringIO
 from urllib.parse import parse_qsl, quote, urlparse
 from unittest.mock import Mock, patch
@@ -2088,6 +2089,218 @@ class DepositHoldTests(TestCase):
         self.deposit.save()
         response = self.client.post(f"{self.deposit.path()}order/")
         self.assertEqual(response.status_code, 400)
+
+
+def _capture(status="COMPLETED"):
+    from concierge.paypal import Capture
+
+    return Capture(id="CAP-77", status=status, amount=Decimal("480.00"), currency="USD")
+
+
+@override_settings(PAYPAL_CLIENT_ID="test-client", PAYPAL_CLIENT_SECRET="test-secret")
+class BookingPaymentTests(TestCase):
+    """A link that charges the booking — alone, or before the deposit."""
+
+    def setUp(self) -> None:
+        self.link = DamageDeposit.objects.create(
+            guest_name="Lena Hoffmann", amount=Decimal("200.00"), currency="USD",
+            kind=DamageDeposit.Kind.BOTH, booking_amount=Decimal("480.00"),
+        )
+
+    def _pay_booking(self, capture=None):
+        with patch("concierge.paypal.create_order", return_value={"id": "ORDER-B"}) as create:
+            self.client.post(f"{self.link.path()}booking/order/")
+        with patch("concierge.paypal.capture_order", return_value=capture or _capture()) as cap:
+            response = self.client.post(f"{self.link.path()}booking/capture/")
+        return create, cap, response
+
+    def test_the_booking_order_is_a_charge_for_the_booking_amount(self) -> None:
+        create, _, _ = self._pay_booking()
+        self.assertEqual(create.call_args.kwargs["intent"], "CAPTURE")
+        self.assertEqual(create.call_args.kwargs["amount"], Decimal("480.00"))
+
+    def test_capturing_marks_the_booking_paid_and_leaves_the_deposit_open(self) -> None:
+        _, cap, response = self._pay_booking()
+        self.assertEqual(response.status_code, 200)
+        cap.assert_called_once_with("ORDER-B")
+        self.link.refresh_from_db()
+        self.assertEqual(self.link.booking_status, DamageDeposit.BookingStatus.PAID)
+        self.assertEqual(self.link.booking_capture_id, "CAP-77")
+        self.assertIsNotNone(self.link.booking_paid_at)
+        self.assertEqual(self.link.status, DamageDeposit.Status.DRAFT)
+        self.assertEqual(self.link.next_step, "deposit")
+
+    def test_a_pending_capture_is_paid_but_flagged(self) -> None:
+        self._pay_booking(_capture("PENDING"))
+        self.link.refresh_from_db()
+        self.assertEqual(self.link.booking_status, DamageDeposit.BookingStatus.PENDING)
+        self.assertEqual(self.link.next_step, "deposit")
+
+    def test_the_booking_is_never_charged_twice(self) -> None:
+        self._pay_booking()
+        with patch("concierge.paypal.capture_order") as cap:
+            response = self.client.post(f"{self.link.path()}booking/capture/")
+        cap.assert_not_called()
+        self.assertEqual(response.status_code, 200)
+        response = self.client.post(f"{self.link.path()}booking/order/")
+        self.assertEqual(response.status_code, 409)
+
+    def test_the_captured_order_id_comes_from_the_database(self) -> None:
+        self.link.booking_order_id = "ORDER-MINE"
+        self.link.save()
+        with patch("concierge.paypal.capture_order", return_value=_capture()) as cap:
+            self.client.post(
+                f"{self.link.path()}booking/capture/",
+                data=json.dumps({"orderID": "ORDER-SOMEONE-ELSES"}),
+                content_type="application/json",
+            )
+        cap.assert_called_once_with("ORDER-MINE")
+
+    def test_the_deposit_waits_for_the_booking(self) -> None:
+        with patch("concierge.paypal.create_order") as create:
+            response = self.client.post(f"{self.link.path()}order/")
+        self.assertEqual(response.status_code, 409)
+        create.assert_not_called()
+
+    def test_a_failed_payment_is_recorded_without_failing_the_deposit(self) -> None:
+        from concierge.paypal import PayPalError
+
+        self.link.booking_order_id = "ORDER-B"
+        self.link.save()
+        error = PayPalError("INSTRUMENT_DECLINED", debug_id="d-9")
+        with patch("concierge.paypal.capture_order", side_effect=error), \
+                patch("concierge.paypal.get_order", return_value={"status": "APPROVED"}):
+            response = self.client.post(f"{self.link.path()}booking/capture/")
+        self.assertEqual(response.status_code, 502)
+        self.assertNotIn("INSTRUMENT_DECLINED", response.json()["error"])
+        self.link.refresh_from_db()
+        self.assertEqual(self.link.booking_status, DamageDeposit.BookingStatus.FAILED)
+        self.assertEqual(self.link.status, DamageDeposit.Status.DRAFT)
+        self.assertIn("d-9", self.link.last_error)
+        self.assertEqual(self.link.next_step, "booking")  # can retry
+
+    def test_an_error_after_paypal_already_charged_is_still_recorded_as_paid(self) -> None:
+        """A capture that timed out here but went through at PayPal is money taken."""
+        from concierge.paypal import PayPalError
+
+        self.link.booking_order_id = "ORDER-B"
+        self.link.save()
+        completed = {"status": "COMPLETED", "purchase_units": [{"payments": {"captures": [
+            {"id": "CAP-LATE", "status": "COMPLETED", "amount": {"value": "480.00", "currency_code": "USD"}},
+        ]}}]}
+        with patch("concierge.paypal.capture_order", side_effect=PayPalError("ORDER_ALREADY_CAPTURED")), \
+                patch("concierge.paypal.get_order", return_value=completed):
+            response = self.client.post(f"{self.link.path()}booking/capture/")
+        self.assertEqual(response.status_code, 200)
+        self.link.refresh_from_db()
+        self.assertEqual(self.link.booking_status, DamageDeposit.BookingStatus.PAID)
+        self.assertEqual(self.link.booking_capture_id, "CAP-LATE")
+
+    def test_a_deposit_only_link_has_no_booking_to_pay(self) -> None:
+        self.link.kind = DamageDeposit.Kind.DEPOSIT
+        self.link.save()
+        response = self.client.post(f"{self.link.path()}booking/order/")
+        self.assertEqual(response.status_code, 409)
+
+    def test_a_booking_only_link_has_no_deposit_to_hold(self) -> None:
+        self.link.kind = DamageDeposit.Kind.BOOKING
+        self.link.booking_status = DamageDeposit.BookingStatus.PAID
+        self.link.save()
+        response = self.client.post(f"{self.link.path()}order/")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.link.next_step, "")
+
+    def test_a_link_that_charges_must_say_how_much(self) -> None:
+        link = DamageDeposit(guest_name="X", amount=Decimal("200.00"), kind=DamageDeposit.Kind.BOTH)
+        with self.assertRaises(ValidationError) as caught:
+            link.full_clean()
+        self.assertIn("booking_amount", caught.exception.message_dict)
+
+
+@override_settings(PAYPAL_CLIENT_ID="test-client", PAYPAL_CLIENT_SECRET="test-secret")
+class BookingPageTests(TestCase):
+    """What the guest reads must make plain which amount is charged and which is held."""
+
+    def setUp(self) -> None:
+        self.link = DamageDeposit.objects.create(
+            guest_name="Lena Hoffmann", amount=Decimal("200.00"), currency="USD",
+            kind=DamageDeposit.Kind.BOTH, booking_amount=Decimal("480.00"), language="es",
+        )
+
+    def _page(self) -> str:
+        return self.client.get(self.link.path()).content.decode()
+
+    def test_both_amounts_and_what_happens_to_each(self) -> None:
+        html = self._page()
+        self.assertIn("480.00", html)
+        self.assertIn("200.00", html)
+        self.assertIn("solo se retiene, no se cobra", html)
+        self.assertIn("Paso 1 de 2", html)
+        self.assertIn("Esto es un pago", html)
+
+    def test_step_one_loads_paypal_to_charge(self) -> None:
+        html = self._page()
+        self.assertIn("intent=capture", html)
+        self.assertIn("booking/order/", html)
+
+    def test_after_paying_step_two_loads_paypal_to_hold(self) -> None:
+        self.link.booking_status = DamageDeposit.BookingStatus.PAID
+        self.link.save()
+        html = self._page()
+        self.assertIn("Tu reserva está pagada", html)
+        self.assertIn("Paso 2 de 2", html)
+        self.assertIn("Esto no es un cobro", html)
+        self.assertIn("intent=authorize", html)
+        self.assertNotIn("booking/order/", html)
+
+    def test_when_everything_is_done_no_button_is_shown(self) -> None:
+        self.link.booking_status = DamageDeposit.BookingStatus.PAID
+        self.link.status = DamageDeposit.Status.HELD
+        self.link.save()
+        html = self._page()
+        self.assertNotIn("paypal.com/sdk/js", html)
+        self.assertNotIn("no está listo", html)
+
+    def test_a_booking_only_page_says_nothing_about_a_deposit(self) -> None:
+        self.link.kind = DamageDeposit.Kind.BOOKING
+        self.link.language = "en"
+        self.link.save()
+        html = self._page()
+        self.assertIn("This is a payment", html)
+        visible = re.sub(r"(?s)<(script|style)[^>]*>.*?</\1>|<[^>]+>", " ", html)
+        self.assertNotIn("deposit", visible.lower())
+
+
+class GuestMessageTests(TestCase):
+    """The message the host pastes, per kind of link."""
+
+    def _message(self, kind, lang="en"):
+        from concierge.links import deposit_message
+
+        link = DamageDeposit(
+            guest_name="Lena", amount=Decimal("200.00"), currency="USD",
+            booking_amount=Decimal("480.00"), kind=kind, language=lang,
+        )
+        return deposit_message(link, "https://x/deposit/t/", "Joaquin")
+
+    def test_every_kind_in_every_language(self) -> None:
+        from concierge.links import LANGUAGES
+
+        for kind in DamageDeposit.Kind.values:
+            for lang in LANGUAGES:
+                body = self._message(kind, lang)
+                self.assertIn("Lena", body)
+                self.assertIn("https://x/deposit/t/", body)
+
+    def test_booking_and_deposit_says_which_is_charged(self) -> None:
+        body = self._message(DamageDeposit.Kind.BOTH, "es")
+        self.assertIn("USD 480.00 — esto se cobra", body)
+        self.assertIn("USD 200.00 — no se cobra", body)
+
+    def test_booking_only_mentions_no_deposit(self) -> None:
+        body = self._message(DamageDeposit.Kind.BOOKING)
+        self.assertIn("USD 480.00", body)
+        self.assertNotIn("deposit", body.replace("/deposit/", ""))
 
 
 @override_settings(PAYPAL_CLIENT_ID="test-client", PAYPAL_CLIENT_SECRET="test-secret")

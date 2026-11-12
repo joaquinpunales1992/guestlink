@@ -1,7 +1,7 @@
 {% extends "admin/change_list.html" %}
 
-{# The three questions this page exists to answer, above the rows. Filters
-   apply to them, so "what do I owe La Bahía in July" is a filter away. #}
+{% comment %} The three questions this page exists to answer, above the rows. Filters
+   apply to them, so "what do I owe La Bahía in July" is a filter away. {% endcomment %}
 {% block result_list %}
   {% if summary %}
     <div style="display:flex;gap:12px;flex-wrap:wrap;margin:0 0 14px">

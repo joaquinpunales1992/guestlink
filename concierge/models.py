@@ -5,6 +5,7 @@ import decimal
 import re
 import secrets
 
+from django.core.exceptions import ValidationError
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
 from django.db import models
 from django.utils import timezone
@@ -812,12 +813,39 @@ class DamageDeposit(models.Model):
     # Statuses where PayPal is holding the guest's money right now. Used by
     # the admin and by sync_deposits to decide what still needs watching.
     LIVE_STATUSES = (Status.HELD,)
+    # Statuses from which a guest may still place the hold. Anything else
+    # means the deposit is settled, and a second hold would be a second
+    # reservation against their card.
+    OPEN_STATUSES = (Status.DRAFT, Status.SENT, Status.FAILED)
+
+    class Kind(models.TextChoices):
+        DEPOSIT = "deposit", "Deposit only"
+        BOOKING = "booking", "Booking payment only"
+        BOTH = "both", "Booking payment + deposit"
+
+    class BookingStatus(models.TextChoices):
+        UNPAID = "unpaid", "Not paid yet"
+        PAID = "paid", "Paid"
+        # PayPal took the payment but has not cleared it (an eCheck, a
+        # review). The guest has paid; the money is not in the account yet.
+        PENDING = "pending", "Paid — PayPal still clearing it"
+        FAILED = "failed", "Failed — PayPal declined the payment"
 
     token = models.CharField(
         max_length=64,
         unique=True,
         editable=False,
         help_text="The secret in the deposit link. Anyone holding it can open this page.",
+    )
+    kind = models.CharField(
+        "what the link asks for",
+        max_length=10,
+        choices=Kind.choices,
+        default=Kind.DEPOSIT,
+        help_text=(
+            "Booking + deposit is two steps on one page: the booking is charged, "
+            "then the deposit is held. The guest approves each in PayPal."
+        ),
     )
 
     # --- who and what for -------------------------------------------------
@@ -867,7 +895,23 @@ class DamageDeposit(models.Model):
     )
     currency = models.CharField(max_length=3, default="USD")
 
-    status = models.CharField(max_length=20, choices=Status.choices, default=Status.DRAFT, db_index=True)
+    status = models.CharField(
+        "deposit status", max_length=20, choices=Status.choices, default=Status.DRAFT, db_index=True,
+    )
+
+    # --- the booking payment ----------------------------------------------
+    # A plain charge, unlike the deposit: no hold and no clock. Refunds, if
+    # ever needed, are done from PayPal's own dashboard.
+    booking_amount = models.DecimalField(
+        max_digits=10, decimal_places=2, default=0, validators=[MinValueValidator(0)],
+        help_text="What the guest pays for the stay. Charged when they approve. Same currency as the deposit.",
+    )
+    booking_status = models.CharField(
+        max_length=10, choices=BookingStatus.choices, default=BookingStatus.UNPAID, db_index=True,
+    )
+    booking_order_id = models.CharField(max_length=64, blank=True, editable=False)
+    booking_capture_id = models.CharField(max_length=64, blank=True, editable=False)
+    booking_paid_at = models.DateTimeField(null=True, blank=True, editable=False)
 
     # --- what PayPal gave us ---------------------------------------------
     paypal_order_id = models.CharField(max_length=64, blank=True, editable=False)
@@ -898,7 +942,7 @@ class DamageDeposit(models.Model):
 
     class Meta:
         ordering = ("-created_at",)
-        verbose_name = "damage deposit"
+        verbose_name = "booking payment / deposit link"
         indexes = [
             models.Index(fields=("status", "expires_at")),
             models.Index(fields=("status", "check_out")),
@@ -916,10 +960,59 @@ class DamageDeposit(models.Model):
             self.environment = getattr(dj_settings, "PAYPAL_ENV", "sandbox")
         return super().save(*args, **kwargs)
 
+    def clean(self):
+        super().clean()
+        errors = {}
+        if self.wants_booking and not (self.booking_amount and self.booking_amount > 0):
+            errors["booking_amount"] = "This link charges the booking — set how much."
+        if self.wants_deposit and not (self.amount and self.amount > 0):
+            errors["amount"] = "This link holds a deposit — set how much."
+        if errors:
+            raise ValidationError(errors)
+
     # --- the link ---------------------------------------------------------
 
     def path(self) -> str:
         return f"/deposit/{self.token}/"
+
+    # --- what the link asks for -------------------------------------------
+
+    @property
+    def wants_booking(self) -> bool:
+        return self.kind in (self.Kind.BOOKING, self.Kind.BOTH)
+
+    @property
+    def wants_deposit(self) -> bool:
+        return self.kind in (self.Kind.DEPOSIT, self.Kind.BOTH)
+
+    @property
+    def booking_open(self) -> bool:
+        """The guest still has the booking to pay."""
+        return self.wants_booking and self.booking_status in (
+            self.BookingStatus.UNPAID, self.BookingStatus.FAILED,
+        )
+
+    @property
+    def booking_settled(self) -> bool:
+        return self.booking_status in (self.BookingStatus.PAID, self.BookingStatus.PENDING)
+
+    @property
+    def deposit_open(self) -> bool:
+        """The guest still has the deposit to leave."""
+        return self.wants_deposit and self.status in self.OPEN_STATUSES
+
+    @property
+    def next_step(self) -> str:
+        """What the guest's page should ask for now: "booking", "deposit" or "".
+
+        Always the booking first. Paying is what secures the stay, so a guest
+        who stops halfway has done the part that matters most.
+        """
+        if self.booking_open:
+            return "booking"
+        if self.deposit_open:
+            return "deposit"
+        return ""
 
     # --- PayPal's clock ---------------------------------------------------
 

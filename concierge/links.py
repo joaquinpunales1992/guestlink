@@ -108,38 +108,85 @@ def destination(service, location, site, *, lang: str, force_whatsapp: bool, bus
     return whatsapp_url(service, location, lang, business_number)
 
 
-# --- damage deposits ------------------------------------------------------
+# --- booking payments and damage deposits ---------------------------------
+#
+# One message per kind of link, each in every language. A "both" message spells
+# out the two amounts and which one is charged, because the guest is about to
+# see two PayPal approvals and should know before opening the link which is a
+# payment and which is only a hold.
 
-_DEPOSIT_TEMPLATES = {
-    "en": (
-        "Hi {guest}, this is {host}. Before check-in we hold a refundable "
-        "{currency} {amount} security deposit. Your card is not charged — PayPal "
-        "only reserves it, and we release it after check-out: {url}"
-    ),
-    "es": (
-        "Hola {guest}, soy {host}. Antes de la entrada retenemos un depósito de "
-        "garantía reembolsable de {currency} {amount}. No se cobra nada a tu "
-        "tarjeta — PayPal solo lo reserva, y lo liberamos tras la salida: {url}"
-    ),
-    "fr": (
-        "Bonjour {guest}, ici {host}. Avant l'arrivée nous bloquons une caution "
-        "remboursable de {currency} {amount}. Votre carte n'est pas débitée — "
-        "PayPal ne fait que la réserver, et nous la libérons après le départ : {url}"
-    ),
+_GUEST_MESSAGES = {
+    "deposit": {
+        "en": (
+            "Hi {guest}, this is {host}. Before check-in we hold a refundable "
+            "{currency} {amount} security deposit. Your card is not charged — PayPal "
+            "only reserves it, and we release it after check-out: {url}"
+        ),
+        "es": (
+            "Hola {guest}, soy {host}. Antes de la entrada retenemos un depósito de "
+            "garantía reembolsable de {currency} {amount}. No se cobra nada a tu "
+            "tarjeta — PayPal solo lo reserva, y lo liberamos tras la salida: {url}"
+        ),
+        "fr": (
+            "Bonjour {guest}, ici {host}. Avant l'arrivée nous bloquons une caution "
+            "remboursable de {currency} {amount}. Votre carte n'est pas débitée — "
+            "PayPal ne fait que la réserver, et nous la libérons après le départ : {url}"
+        ),
+    },
+    "booking": {
+        "en": (
+            "Hi {guest}, this is {host}. Here is the link to pay your booking, "
+            "{currency} {booking}, securely through PayPal: {url}"
+        ),
+        "es": (
+            "Hola {guest}, soy {host}. Aquí tienes el enlace para pagar tu reserva, "
+            "{currency} {booking}, de forma segura con PayPal: {url}"
+        ),
+        "fr": (
+            "Bonjour {guest}, ici {host}. Voici le lien pour régler votre réservation, "
+            "{currency} {booking}, en toute sécurité avec PayPal : {url}"
+        ),
+    },
+    "both": {
+        "en": (
+            "Hi {guest}, this is {host}. Here is the link for your stay. It has two steps:\n"
+            "1. Booking payment: {currency} {booking} — this is charged.\n"
+            "2. Refundable security deposit: {currency} {amount} — not charged. PayPal "
+            "only reserves it, and we release it after check-out.\n"
+            "{url}"
+        ),
+        "es": (
+            "Hola {guest}, soy {host}. Aquí tienes el enlace para tu estancia. Tiene dos pasos:\n"
+            "1. Pago de la reserva: {currency} {booking} — esto se cobra.\n"
+            "2. Depósito de garantía reembolsable: {currency} {amount} — no se cobra. "
+            "PayPal solo lo reserva, y lo liberamos tras la salida.\n"
+            "{url}"
+        ),
+        "fr": (
+            "Bonjour {guest}, ici {host}. Voici le lien pour votre séjour, en deux étapes :\n"
+            "1. Paiement de la réservation : {currency} {booking} — ce montant est débité.\n"
+            "2. Caution remboursable : {currency} {amount} — non débitée. PayPal ne fait "
+            "que la réserver, et nous la libérons après le départ.\n"
+            "{url}"
+        ),
+    },
 }
 
 
 def deposit_message(deposit, url: str, host_name: str) -> str:
-    """The WhatsApp text asking a guest for their deposit, in their language.
+    """The text a host sends the guest with their link, in the guest's language.
 
-    Lives here with the other guest-facing copy rather than in the admin, so
-    the wording a guest receives is not buried in a view.
+    Shaped by what the link asks for — a deposit, the booking, or both. Lives
+    here with the other guest-facing copy rather than in the admin, so the
+    wording a guest receives is not buried in a view.
     """
     lang = normalize_language(getattr(deposit, "language", ""))
-    return _DEPOSIT_TEMPLATES[lang].format(
+    kind = getattr(deposit, "kind", "deposit") or "deposit"
+    return _GUEST_MESSAGES[kind][lang].format(
         guest=deposit.guest_name,
         host=host_name,
         currency=deposit.currency,
         amount=f"{deposit.amount:.2f}",
+        booking=f"{getattr(deposit, 'booking_amount', 0) or 0:.2f}",
         url=url,
     )

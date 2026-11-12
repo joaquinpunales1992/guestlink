@@ -19,6 +19,8 @@ urlpatterns = [
     path("deposit/<str:token>/", concierge_views.deposit, name="deposit"),
     path("deposit/<str:token>/order/", concierge_views.deposit_create_order, name="deposit_create_order"),
     path("deposit/<str:token>/authorize/", concierge_views.deposit_authorize, name="deposit_authorize"),
+    path("deposit/<str:token>/booking/order/", concierge_views.booking_create_order, name="booking_create_order"),
+    path("deposit/<str:token>/booking/capture/", concierge_views.booking_capture, name="booking_capture"),
     path("go/<slug:service_slug>/", concierge_views.go, name="go"),
     # Staff-only, and declared before the location catch-all below.
     # Before the location form below: a token is not a slug, and this keeps the

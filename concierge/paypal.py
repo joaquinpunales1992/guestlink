@@ -1,11 +1,12 @@
 """Thin wrapper around the PayPal Orders v2 / Payments v2 APIs.
 
-Only the authorization lifecycle is covered, because that is the only thing a
-damage deposit needs: put a hold on the guest's funds, then either let it go or
-take part of it.
+Mostly the authorization lifecycle, which is what a damage deposit needs: put
+a hold on the guest's funds, then either let it go or take part of it. A
+booking payment is the one plain charge: create, approve, capture.
 
-    create_order()      intent=AUTHORIZE, returns the id the JS SDK approves
+    create_order()      returns the id the JS SDK approves (AUTHORIZE or CAPTURE)
     authorize_order()   after approval — this is what places the hold
+    capture_order()     after approval of a CAPTURE order — a booking payment
     void()              checkout was clean; release the money
     capture()           something was broken; take up to the held amount
     reauthorize()       the stay outran the 3-day honor period
@@ -229,12 +230,20 @@ def _readable_error(response) -> str:
 # --- the authorization lifecycle -----------------------------------------
 
 
-def create_order(*, amount, currency: str, reference: str, description: str, brand_name: str = "") -> dict:
-    """Create an AUTHORIZE-intent order. Returns PayPal's order object.
+def create_order(
+    *, amount, currency: str, reference: str, description: str, brand_name: str = "",
+    intent: str = "AUTHORIZE",
+) -> dict:
+    """Create an order for the guest to approve. Returns PayPal's order object.
 
-    Nothing is held yet — this only describes what the guest is about to
-    approve. The hold happens in `authorize_order`.
+    Nothing moves yet — this only describes what the guest is about to
+    approve. With the default AUTHORIZE intent the hold happens in
+    `authorize_order`; with CAPTURE (a booking payment) the money moves in
+    `capture_order`. The intent must match the one the page loaded PayPal's
+    JS SDK with, or the button refuses the order.
     """
+    if intent not in ("AUTHORIZE", "CAPTURE"):
+        raise ValueError(f"Unknown PayPal intent {intent!r}")
     unit = {
         "amount": money(amount, currency),
         # Both are shown to the guest on PayPal's own approval screen, which is
@@ -243,7 +252,7 @@ def create_order(*, amount, currency: str, reference: str, description: str, bra
         "custom_id": reference[:127],
     }
     body = {
-        "intent": "AUTHORIZE",
+        "intent": intent,
         "purchase_units": [unit],
         "payment_source": {
             "paypal": {
@@ -264,6 +273,16 @@ def authorize_order(order_id: str) -> Authorization:
     """Place the hold on an order the guest has approved."""
     payload = _request("POST", f"/v2/checkout/orders/{order_id}/authorize", body={}, idempotent=True)
     return _authorization_from_order(payload)
+
+
+def capture_order(order_id: str) -> "Capture":
+    """Take the money for a CAPTURE-intent order the guest has approved.
+
+    This is the booking payment: unlike a deposit there is no hold and no
+    clock, the guest is charged now.
+    """
+    payload = _request("POST", f"/v2/checkout/orders/{order_id}/capture", body={}, idempotent=True)
+    return capture_from_order(payload)
 
 
 def get_order(order_id: str) -> dict:
@@ -317,6 +336,47 @@ def reauthorize(authorization_id: str, *, amount, currency: str) -> Authorizatio
 
 
 # --- response parsing ----------------------------------------------------
+
+
+@dataclass
+class Capture:
+    """The parts of a PayPal capture this app stores or shows.
+
+    `status` is COMPLETED when the money has moved. PENDING means PayPal
+    accepted the payment but is still clearing it (an eCheck, a review) — the
+    guest has paid, but it is not in the account yet.
+    """
+
+    id: str
+    status: str
+    amount: decimal.Decimal
+    currency: str
+    raw: dict = field(default_factory=dict)
+
+
+def capture_from_order(order: dict) -> Capture:
+    """Dig the capture out of an order response, failing loudly if absent."""
+    for unit in order.get("purchase_units") or []:
+        captures = (unit.get("payments") or {}).get("captures") or []
+        if captures:
+            node = captures[0]
+            amount_node = node.get("amount") or {}
+            try:
+                amount = decimal.Decimal(str(amount_node.get("value", "0")))
+            except decimal.InvalidOperation:
+                amount = decimal.Decimal("0")
+            return Capture(
+                id=node.get("id", ""),
+                status=node.get("status", ""),
+                amount=amount,
+                currency=amount_node.get("currency_code", "USD"),
+                raw=node,
+            )
+    raise PayPalError(
+        f"PayPal accepted the order but returned no capture "
+        f"(order status {order.get('status', 'unknown')!r}). Nothing was charged."
+    )
+
 
 
 def _authorization_from_order(order: dict) -> Authorization:

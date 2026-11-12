@@ -367,26 +367,28 @@ def ticket_thread(request: HttpRequest, short_code: str) -> HttpResponse:
     )
 
 
-# --- damage deposits ------------------------------------------------------
+# --- booking payments and damage deposits ---------------------------------
 #
-# Three views, all keyed on the deposit's secret token: the page the guest
-# opens, and the two JSON endpoints PayPal's button calls. No card details
-# ever reach this server — the guest approves inside PayPal's own popup and
-# all that comes back is an order id to authorize.
+# One page per link, keyed on its secret token, plus the JSON endpoints
+# PayPal's button calls: two for the booking payment (create, capture) and two
+# for the deposit (create, authorize). No card details ever reach this server
+# — the guest approves inside PayPal's own popup and all that comes back is an
+# order id, which is then read from the database, never from the request.
+#
+# A "booking + deposit" link shows one step at a time, booking first, because
+# PayPal's JS SDK is loaded for a single intent: CAPTURE for the booking,
+# AUTHORIZE for the deposit. Paying reloads the page onto the next step.
 
-# Statuses from which a guest may still place a hold. Anything else means the
-# deposit is already settled, and a second hold would be a second reservation
-# against their card.
-_DEPOSIT_OPEN = (
-    DamageDeposit.Status.DRAFT,
-    DamageDeposit.Status.SENT,
-    DamageDeposit.Status.FAILED,
-)
+_DEPOSIT_OPEN = DamageDeposit.OPEN_STATUSES
 
 
 def _deposit_terms(site: SiteSettings, lang: str) -> str:
     """This site's deposit wording, falling back to English when unwritten."""
     return getattr(site, f"deposit_terms_{lang}", "") or site.deposit_terms_en
+
+
+def _brand(record: DamageDeposit) -> str:
+    return record.location.name if record.location else settings.HOST_NAME
 
 
 def deposit(request: HttpRequest, token: str) -> HttpResponse:
@@ -402,6 +404,7 @@ def deposit(request: HttpRequest, token: str) -> HttpResponse:
     # them, so a link pasted into Booking.com opens already translated without
     # the host having to remember to append ?lang=.
     lang = normalize_language(request.GET.get("lang") or record.language)
+    step = record.next_step if paypal.is_configured() else ""
 
     return render(
         request,
@@ -410,12 +413,16 @@ def deposit(request: HttpRequest, token: str) -> HttpResponse:
             "deposit": record,
             "site": site,
             "lang": lang,
-            "terms": _deposit_terms(site, lang),
+            "terms": _deposit_terms(site, lang) if record.wants_deposit else "",
             "languages": LANGUAGE_LABELS,
             "host_name": settings.HOST_NAME,
-            "can_pay": record.status in _DEPOSIT_OPEN and paypal.is_configured(),
+            "step": step,
+            "can_pay": bool(step),
+            "two_steps": record.kind == DamageDeposit.Kind.BOTH,
             "already_held": record.status == DamageDeposit.Status.HELD,
+            "nothing_left": not record.next_step,
             "paypal_client_id": settings.PAYPAL_CLIENT_ID,
+            "paypal_intent": "capture" if step == "booking" else "authorize",
             # Shown as a banner so a test link is never mistaken for a real one.
             "sandbox": not paypal.is_live(),
             "honor_days": paypal.HONOR_PERIOD_DAYS,
@@ -424,9 +431,118 @@ def deposit(request: HttpRequest, token: str) -> HttpResponse:
 
 
 @require_http_methods(["POST"])
+def booking_create_order(request: HttpRequest, token: str) -> HttpResponse:
+    """Called by the PayPal button to get an order id for the booking. Charges nothing yet."""
+    record = get_object_or_404(DamageDeposit, token=token)
+    if not record.booking_open:
+        return JsonResponse({"error": "This booking has already been paid."}, status=409)
+    if record.booking_amount <= 0:
+        return JsonResponse({"error": "This booking has no amount set."}, status=400)
+
+    try:
+        order = paypal.create_order(
+            amount=record.booking_amount,
+            currency=record.currency,
+            reference=record.booking_reference or f"booking-{record.pk}",
+            description=f"Booking payment — {record.guest_name}",
+            brand_name=_brand(record),
+            intent="CAPTURE",
+        )
+    except paypal.PayPalError as exc:
+        return _booking_failure(record, exc, stage="booking_create_order")
+
+    record.booking_order_id = order.get("id", "")
+    record.environment = settings.PAYPAL_ENV
+    record.last_error = ""
+    record.save(update_fields=("booking_order_id", "environment", "last_error"))
+    return JsonResponse({"id": record.booking_order_id})
+
+
+@require_http_methods(["POST"])
+def booking_capture(request: HttpRequest, token: str) -> HttpResponse:
+    """Charge the booking, once the guest has approved it in PayPal.
+
+    As with the deposit, the order id comes from the stored record: capturing
+    an id from the request body would let anyone attach someone else's
+    payment to this booking.
+    """
+    record = get_object_or_404(DamageDeposit, token=token)
+    if record.booking_settled:
+        # Double-tap or a PayPal retry. Never charge twice.
+        return JsonResponse({"status": record.booking_status})
+    if not record.booking_open:
+        return JsonResponse({"error": "This link has no booking to pay."}, status=409)
+    if not record.booking_order_id:
+        return JsonResponse({"error": "No PayPal order to capture."}, status=400)
+
+    try:
+        capture = paypal.capture_order(record.booking_order_id)
+    except paypal.PayPalError as exc:
+        # A capture that timed out on our side may still have gone through on
+        # PayPal's (and a retry then fails with ORDER_ALREADY_CAPTURED).
+        # Recording "failed" for money the guest has actually paid is the one
+        # mistake this must not make, so ask PayPal before concluding.
+        capture = _capture_if_it_happened(record.booking_order_id)
+        if capture is None:
+            return _booking_failure(record, exc, stage="booking_capture")
+
+    if capture.status not in ("COMPLETED", "PENDING"):
+        return _booking_failure(
+            record, paypal.PayPalError(f"PayPal returned capture status {capture.status!r}"),
+            stage="booking_capture",
+        )
+
+    record.booking_capture_id = capture.id
+    record.booking_status = (
+        DamageDeposit.BookingStatus.PAID if capture.status == "COMPLETED"
+        else DamageDeposit.BookingStatus.PENDING
+    )
+    record.booking_paid_at = timezone.now()
+    record.environment = settings.PAYPAL_ENV
+    record.last_error = ""
+    record.save(update_fields=(
+        "booking_capture_id", "booking_status", "booking_paid_at", "environment", "last_error",
+    ))
+    logger.info(
+        "Booking %s paid: %s %s, capture %s (%s)",
+        record.pk, record.currency, record.booking_amount, capture.id, capture.status,
+    )
+    return JsonResponse({"status": record.booking_status})
+
+
+def _capture_if_it_happened(order_id: str):
+    """The order's capture if PayPal completed it despite an error, else None."""
+    try:
+        order = paypal.get_order(order_id)
+        if order.get("status") == "COMPLETED":
+            return paypal.capture_from_order(order)
+    except paypal.PayPalError:
+        pass
+    return None
+
+
+def _booking_failure(record: DamageDeposit, exc: "paypal.PayPalError", *, stage: str) -> JsonResponse:
+    """Like _deposit_failure, but leaves the deposit's own status alone."""
+    record.booking_status = DamageDeposit.BookingStatus.FAILED
+    record.last_error = f"{stage}: {exc}" + (f" (debug id {exc.debug_id})" if exc.debug_id else "")
+    record.save(update_fields=("booking_status", "last_error"))
+    logger.error("Booking %s failed at %s: %s", record.pk, stage, exc)
+    return JsonResponse(
+        {"error": "PayPal could not complete the payment. Please try again or contact your host."},
+        status=502,
+    )
+
+
+@require_http_methods(["POST"])
 def deposit_create_order(request: HttpRequest, token: str) -> HttpResponse:
     """Called by the PayPal button to get an order id. Holds nothing yet."""
     record = get_object_or_404(DamageDeposit, token=token)
+    if not record.wants_deposit:
+        return JsonResponse({"error": "This link has no deposit."}, status=409)
+    if record.booking_open:
+        # The page asks for the booking first; a deposit order now would mean
+        # the guest skipped a step the host is counting on.
+        return JsonResponse({"error": "Please pay the booking first."}, status=409)
     if record.status not in _DEPOSIT_OPEN:
         return JsonResponse(
             {"error": f"This deposit is already {record.get_status_display().split(' — ')[0].lower()}."},
@@ -442,7 +558,7 @@ def deposit_create_order(request: HttpRequest, token: str) -> HttpResponse:
             currency=record.currency,
             reference=reference,
             description=f"Refundable damage deposit — {record.guest_name}",
-            brand_name=record.location.name if record.location else settings.HOST_NAME,
+            brand_name=_brand(record),
         )
     except paypal.PayPalError as exc:
         return _deposit_failure(record, exc, stage="create_order")
@@ -467,7 +583,7 @@ def deposit_authorize(request: HttpRequest, token: str) -> HttpResponse:
         # The guest double-tapped, or PayPal retried. Report the existing hold
         # rather than placing a second one against their card.
         return JsonResponse({"status": "held", "amount": str(record.amount)})
-    if record.status not in _DEPOSIT_OPEN:
+    if not record.wants_deposit or record.status not in _DEPOSIT_OPEN:
         return JsonResponse({"error": "This deposit is no longer open."}, status=409)
     if not record.paypal_order_id:
         return JsonResponse({"error": "No PayPal order to authorize."}, status=400)
